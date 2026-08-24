@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ e.title }}{% endblock %}
+{% block chrome %}{% endblock %}
+
+{% block content %}
+<style>
+/* The public page is the plainest thing here on purpose: no scripts, no
+   cookies, no webfonts. It gets opened on old phones in halls with one bar. */
+.sheet{max-width:460px;margin:26px auto;background:#fff;border:2px solid var(--ink)}
+.top{background:var(--pink);color:#fff;padding:18px 20px}
+.when{font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;opacity:.95}
+.ttl{font-size:1.55rem;font-weight:800;line-height:1.08;margin:6px 0 8px}
+.meta{font-size:.85rem;line-height:1.55}
+.mid{padding:16px 20px}
+.ask{font-size:.7rem;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);margin:0 0 10px}
+.pick{display:flex;gap:11px;align-items:center;border:1.5px solid var(--ink);
+  padding:11px 13px;margin-bottom:8px;text-decoration:none;color:var(--ink)}
+.pick:hover{background:var(--paper);box-shadow:2px 2px 0 var(--ink);transform:translate(-1px,-1px)}
+.pick .c{font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;
+  border:1.5px solid var(--ink);padding:2px 5px}
+.pick .r{margin-left:auto;font-family:ui-monospace,monospace;font-size:.72rem}
+.shut{opacity:.55;pointer-events:none}
+.body{font-size:.9rem;line-height:1.6;border-top:1px solid var(--rule);
+  margin-top:16px;padding-top:14px;white-space:pre-wrap}
+.foot{border-top:2px dashed var(--ink);padding:12px 20px;font-size:.78rem;
+  color:var(--dim);display:flex;justify-content:space-between;gap:10px;align-items:center}
+.full-note{background:var(--ink);color:var(--paper);padding:9px 20px;font-size:.85rem}
+@media print{.foot a{display:none}body{background:#fff}.sheet{border-width:1px}}
+</style>
+
+<div class="sheet">
+  <div class="top">
+    <div class="when">{{ e.starts_at|replace("T", " · ") }}</div>
+    <h1 class="ttl">{{ e.title }}</h1>
+    {% if e.strap %}<p class="meta" style="margin:0 0 8px"><b>{{ e.strap }}</b></p>{% endif %}
+    <p class="meta" style="margin:0">
+      {% if e.venue %}{{ e.venue }}<br>{% endif %}
+      {% if e.address %}{{ e.address }}{% endif %}
+    </p>
+  </div>
+
+  {% if e.status == 'closed' or cap.full %}
+  <p class="full-note"><b>Sign-ups are closed</b> — the room is full. Some
+    platforms may still take names for a waiting list.</p>
+  {% endif %}
+
+  <div class="mid">
+    {% if channels %}
+      <p class="ask">Sign up wherever suits you</p>
+      {% for ch in channels %}
+        {% set rem = remaining_for(ch.id) %}
+        {# A platform that can't be closed stays open however full the room is.
+           Saying "waiting list" for one that has no waiting list would be a
+           promise to the reader that nobody can keep. #}
+        {% set closeable = capability(ch.kind, 'close') != 'no' %}
+        {% set waitlists = capability(ch.kind, 'waitlist') != 'no'
+                           and ch.policy == 'waitlist' %}
+        {% set shut = closeable and (ch.state == 'closed'
+                      or (cap.full and ch.policy != 'open')) %}
+        <a class="pick {{ 'shut' if shut and not waitlists }}"
+           href="{{ ch.url }}" rel="noopener">
+          <span class="c">{{ CODES.get(ch.kind, '··') }}</span>
+          <span>{{ ch.label }}</span>
+          <span class="r">
+            {% if shut %}{{ 'waiting list' if waitlists else 'full' }}
+            {% elif cap.full %}still open
+            {% elif rem is not none %}{{ rem }} left
+            {% else %}open{% endif %}
+          </span>
+        </a>
+      {% endfor %}
+      <p class="hint" style="font-size:.78rem">
+        Same event, wherever you pick. Use the one you already have an account for.
+      </p>
+    {% else %}
+      <p class="ask">Details</p>
+      <p class="hint">Sign-up links are being set up. Check back shortly.</p>
+    {% endif %}
+
+    {% if e.accessibility %}
+      <p class="body" style="margin-bottom:0"><b>Getting in:</b> {{ e.accessibility }}</p>
+    {% endif %}
+    {% if e.body %}<div class="body">{{ e.body }}</div>{% endif %}
+    {% if e.contact %}
+      <p class="hint" style="margin-top:14px">Questions: {{ e.contact }}</p>
+    {% endif %}
+  </div>
+
+  <div class="foot">
+    <a href="/l/{{ e.slug }}.ics">Add to your calendar</a>
+    <span>{{ e.venue or 'Turnout' }}</span>
+  </div>
+</div>
+{% endblock %}

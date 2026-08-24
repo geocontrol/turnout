@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+{% block title %}{{ e.title }} — Turnout{% endblock %}
+
+{% block hdr_right %}
+<div style="text-align:right">
+  <div style="font-weight:700;font-size:.92rem">{{ e.title }}</div>
+  <div class="tag mono">{{ e.starts_at|replace("T"," ") }}</div>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<div class="strip"><div class="in">
+  <div>
+    <div class="lbl">Signed up</div>
+    {% if cap.uncapped %}
+      <div class="big">{{ cap.going }}</div>
+    {% else %}
+      <div class="big">{{ cap.going }}<small>/{{ cap.sellable }}</small></div>
+    {% endif %}
+  </div>
+  <div><div class="lbl">Waiting</div><div class="big">{{ cap.waitlist }}</div></div>
+
+  {% if not cap.uncapped %}
+  <div class="gauge">
+    <div class="track">
+      {% for c in cap.channels %}{% if c.going %}
+        <i style="width:{{ (c.going / cap.sellable * 100)|round(1) }}%;
+           background:{{ ['#8FA8E8','#E9B54A','#7FC4A5','#E58FB4','#B9A2E0'][loop.index0 % 5] }}"></i>
+      {% endif %}{% endfor %}
+      {% if cap.waitlist %}
+        <i class="wl" style="width:{{ (cap.waitlist / cap.sellable * 100)|round(1) }}%"></i>
+      {% endif %}
+    </div>
+    <div class="key">
+      {% for c in cap.channels %}{% if c.going %}
+        <span><b style="background:{{ ['#8FA8E8','#E9B54A','#7FC4A5','#E58FB4','#B9A2E0'][loop.index0 % 5] }}"></b>{{ c.label }} {{ c.going }}</span>
+      {% endif %}{% endfor %}
+      <span style="margin-left:auto">{{ cap.pct }}% · {{ cap.remaining }} left{% if e.oversell_pct %} (room holds {{ e.capacity }}, {{ e.oversell_pct }}% over-offered){% endif %}</span>
+    </div>
+  </div>
+  {% else %}
+  <div class="gauge"><p class="hint" style="color:#fff;opacity:.85;margin:0">
+    No limit set. Add one on the Event tab if the room has a number.</p></div>
+  {% endif %}
+
+  <form method="post" action="/events/{{ e.id }}/close" style="display:flex;gap:7px">
+    {% if e.status == 'closed' %}
+      <input type="hidden" name="open_" value="1">
+      <button class="ghost" style="color:#fff;border-color:#fff">Reopen sign-ups</button>
+    {% else %}
+      <button class="{{ 'hot' if cap.full else 'ghost' }}"
+        {% if not cap.full %}style="color:#fff;border-color:#fff"{% endif %}>Close sign-ups</button>
+    {% endif %}
+  </form>
+</div></div>
+
+{% if cap.full and e.status != 'closed' %}
+<div style="background:var(--pink);color:#fff;padding:9px 16px;font-size:.9rem">
+  <b>The room is full.</b> Closing here does what each platform allows —
+  and tells you which ones you'll have to do by hand.
+</div>
+{% endif %}
+
+<nav class="nav">
+  {% for id, label, count in [
+      ('event','Event', drift|length),
+      ('channels','Where it\'s listed', channels|selectattr('state','equalto','manual')|list|length),
+      ('signups','Sign-ups', 0), ('link','The link', 0), ('log','What happened', 0)] %}
+    <a href="/events/{{ e.id }}?tab={{ id }}" class="{{ 'on' if tab == id }}">{{ label }}{% if count %}<span class="pip">{{ count }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+
+<div class="wrap">
+
+{# ------------------------------------------------------------------ event #}
+{% if tab == 'event' %}
+  {% if drift %}
+  <div class="banner warn">
+    <div class="grow"><b>Edited since you last pushed:</b>
+      {% for d in drift %}<span class="chip">{{ d }}</span>{% endfor %}</div>
+    <form method="post" action="/events/{{ e.id }}/push"><button>Push everywhere</button></form>
+  </div>
+  {% endif %}
+
+  <form method="post" action="/events/{{ e.id }}">
+    <div class="card">
+      <h2>What it is</h2>
+      <label class="f"><span>Title</span><input name="title" value="{{ e.title }}" required></label>
+      <label class="f"><span>One line summary</span><input name="strap" value="{{ e.strap }}"></label>
+      <label class="f"><span>Description</span><textarea name="body">{{ e.body }}</textarea></label>
+    </div>
+
+    <div class="card">
+      <h2>When and where</h2>
+      <div class="row">
+        <label class="f"><span>Starts</span>
+          <input name="starts_at" type="datetime-local" value="{{ e.starts_at }}" required></label>
+        <label class="f"><span>Ends</span>
+          <input name="ends_at" type="datetime-local" value="{{ e.ends_at or '' }}"></label>
+      </div>
+      <div class="row">
+        <label class="f"><span>Venue</span><input name="venue" value="{{ e.venue }}"></label>
+        <label class="f"><span>Address</span><input name="address" value="{{ e.address }}"></label>
+      </div>
+      <label class="f"><span>Access notes</span>
+        <input name="accessibility" value="{{ e.accessibility }}"
+          placeholder="Step-free, hearing loop, creche in the side room"></label>
+      <p class="hint">Access notes go on the public page and into every listing.
+        Put them in — people plan around them.</p>
+    </div>
+
+    <div class="card">
+      <h2>How many fit</h2>
+      <div class="row">
+        <label class="f"><span>The room holds</span>
+          <input name="capacity" type="number" min="1" value="{{ e.capacity or '' }}"
+            placeholder="leave blank for no limit"></label>
+        <label class="f"><span>Offer this much over</span>
+          <input name="oversell_pct" type="number" min="0" max="100" value="{{ e.oversell_pct }}"></label>
+        <label class="f"><span>Divide places</span>
+          <select name="capacity_mode">
+            <option value="pool" {{ 'selected' if e.capacity_mode == 'pool' }}>Shared between platforms</option>
+            <option value="allocated" {{ 'selected' if e.capacity_mode == 'allocated' }}>Fixed share each</option>
+          </select></label>
+      </div>
+      <p class="hint">
+        <b>Shared</b> tells every platform how many are left and closes them all when
+        it fills — nothing goes unused, but two people signing up at the same moment
+        can both get in. <b>Fixed share</b> gives each platform its own number, so
+        nothing oversells but places can sit unused on one platform while another
+        turns people away.
+        {% if not cap.uncapped and e.capacity_mode == 'allocated' and cap.allocation_drift %}
+        <br><b style="color:#B4362F">The shares add up to {{ cap.allocated_total }},
+        {{ 'more' if cap.allocation_drift > 0 else 'fewer' }} than the
+        {{ cap.sellable }} places you're offering.</b>
+        {% endif %}
+      </p>
+      <label class="f"><span>Who to contact</span><input name="contact" value="{{ e.contact }}"></label>
+    </div>
+
+    <button type="submit">Save</button>
+  </form>
+
+{# --------------------------------------------------------------- channels #}
+{% elif tab == 'channels' %}
+  <h1>Where it's listed</h1>
+  <p class="hint" style="max-width:62ch">
+    Add a platform for each place the event should appear. You can paste an address
+    you made yourself, or let Turnout create and manage the listing where it has
+    access. Turnout never shows a control the platform can't actually honour.
+  </p>
+
+  {% set blocked = [] %}{% for ch in channels %}{% if needs_access.get(ch.id) %}{% set _ = blocked.append(ch) %}{% endif %}{% endfor %}
+  {% if blocked %}
+  <div class="banner warn">
+    <div class="grow">
+      <b>{{ blocked|map(attribute='label')|join(', ') }}</b>
+      {{ 'need' if blocked|length > 1 else 'needs' }} access before Turnout can put
+      the event up {{ 'there' }} for you. Until then you can still paste in an
+      address you made yourself — the public link works either way.
+    </div>
+    <a class="btn" href="/access?kind={{ blocked[0].kind }}&next=/events/{{ e.id }}%3Ftab%3Dchannels">Add access</a>
+  </div>
+  {% endif %}
+
+  <div class="grid">
+  {% for ch in channels %}
+    <div class="card" style="margin:0">
+      <div style="display:flex;gap:9px;align-items:flex-start">
+        <span class="mono" style="border:1.5px solid var(--ink);padding:2px 5px;font-size:.75rem">{{ CODES.get(ch.kind,'··') }}</span>
+        <div style="flex:1;min-width:0">
+          <h3 style="margin:0;font-size:1rem">{{ ch.label }}</h3>
+          {% if ch.url %}<a class="mono hint" style="word-break:break-all" href="{{ ch.url }}">{{ ch.url }}</a>{% endif %}
+        </div>
+        <span class="state s-{{ ch.state }}">{{ ch.state }}</span>
+      </div>
+
+      {% if ch.error %}<p class="hint" style="color:#B4362F"><b>{{ ch.error }}</b></p>{% endif %}
+      <p class="hint">{{ NOTES.get(ch.kind,'') }}</p>
+
+      {% if ch.kind in NEEDS_ACCESS %}
+        {% if needs_access.get(ch.id) %}
+          <p class="hint" style="border-left:3px solid var(--amber);padding-left:9px">
+            <b>No access saved.</b> This behaves as a link you manage yourself.
+            <a href="/access?kind={{ ch.kind }}&next=/events/{{ e.id }}%3Ftab%3Dchannels">Add {{ NAMES[ch.kind] }} access</a>
+          </p>
+        {% else %}
+          {% set mine = credentials|selectattr('kind','equalto',ch.kind)|list %}
+          <p class="hint" style="border-left:3px solid var(--moss);padding-left:9px">
+            Using <b>{{ (mine|selectattr('id','equalto',ch.credential_id)|list|first
+                        or mine|last).label }}</b>.
+            <a href="/access?next=/events/{{ e.id }}%3Ftab%3Dchannels">Change</a>
+          </p>
+        {% endif %}
+      {% endif %}
+
+      <div class="caps">
+        {% for label, value, word in capability_rows(ch.kind) %}
+          <div><span>{{ label }}</span><span class="mono v-{{ value }}">{{ word }}</span></div>
+        {% endfor %}
+      </div>
+
+      <form method="post" action="/channels/{{ ch.id }}" style="margin-top:11px">
+        <label class="f"><span>Address</span><input name="url" value="{{ ch.url }}"
+          placeholder="https://..."></label>
+        <div class="row">
+          {% if e.capacity_mode == 'allocated' and capability(ch.kind,'capacity') == 'yes' %}
+          <label class="f"><span>Its share</span>
+            <input name="allocation" type="number" min="0" value="{{ ch.allocation or '' }}"></label>
+          {% endif %}
+          {% if can(ch.kind,'close') or capability(ch.kind,'close') == 'manual' %}
+          <label class="f"><span>When full</span>
+            <select name="policy">
+              <option value="waitlist" {{ 'selected' if ch.policy=='waitlist' }}>Waiting list</option>
+              <option value="close" {{ 'selected' if ch.policy=='close' }}>Close it</option>
+              <option value="open" {{ 'selected' if ch.policy=='open' }}>Leave open</option>
+            </select></label>
+          {% endif %}
+        </div>
+        {% set mine = credentials|selectattr('kind','equalto',ch.kind)|list %}
+        {% if mine|length > 1 %}
+        <label class="f"><span>Which access</span>
+          <select name="credential_id">
+            {% for cr in mine %}
+              <option value="{{ cr.id }}" {{ 'selected' if ch.credential_id == cr.id }}>{{ cr.label }}</option>
+            {% endfor %}
+          </select></label>
+        {% elif mine %}
+          <input type="hidden" name="credential_id" value="{{ ch.credential_id or '' }}">
+        {% endif %}
+        <label style="font-size:.85rem;display:flex;gap:7px;align-items:center;margin-bottom:10px">
+          <input type="checkbox" name="show_on_list" value="1" style="width:auto"
+            {{ 'checked' if ch.show_on_list }}> Show on the public link
+        </label>
+        <button class="ghost sm" type="submit">Save</button>
+      </form>
+      <form method="post" action="/channels/{{ ch.id }}/delete" style="margin-top:6px">
+        <button class="ghost sm" type="submit">Remove</button>
+      </form>
+    </div>
+  {% endfor %}
+  </div>
+
+  <div class="card" style="margin-top:15px">
+    <h2>Add a platform</h2>
+    <form method="post" action="/events/{{ e.id }}/channels">
+      <div class="row">
+        <label class="f"><span>Which one</span>
+          <select name="kind">
+            {% for k in KINDS %}
+            <option value="{{ k }}">{{ NAMES[k] }}{% if k not in IMPLEMENTED %} — link only for now{% endif %}</option>
+            {% endfor %}
+          </select></label>
+        <label class="f"><span>Call it</span><input name="label" placeholder="optional"></label>
+        <label class="f"><span>Address, if you already made it</span>
+          <input name="url" placeholder="https://..."></label>
+      </div>
+      <button type="submit">Add</button>
+    </form>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <form method="post" action="/events/{{ e.id }}/publish"><button class="hot">Publish where Turnout can</button></form>
+    <form method="post" action="/events/{{ e.id }}/sync"><button class="ghost">Fetch sign-ups now</button></form>
+  </div>
+
+{# ---------------------------------------------------------------- signups #}
+{% elif tab == 'signups' %}
+  <h1>Everyone who signed up</h1>
+  <p class="hint" style="max-width:62ch">
+    One list, gathered from every platform. Someone who signed up in two places
+    appears once. Someone who signed up somewhere that won't give you an email
+    address appears on their own and is marked — matching those on a name alone
+    is a guess, and the cost of getting it wrong lands on a real person at the door.
+  </p>
+
+  <div class="banner info">
+    <div class="grow">
+      <b>{{ people|selectattr('status','equalto','going')|list|length }}</b> going ·
+      <b>{{ people|selectattr('status','equalto','waitlist')|list|length }}</b> waiting ·
+      <b>{{ people|selectattr('merged')|list|length }}</b> matched across platforms ·
+      <b>{{ people|rejectattr('keyed')|list|length }}</b> with no email to match on
+    </div>
+    <a class="btn ghost sm" href="/events/{{ e.id }}/signups.csv">Download CSV</a>
+    <form method="post" action="/events/{{ e.id }}/sync"><button class="ghost sm">Fetch now</button></form>
+  </div>
+
+  {% if suggestions %}
+  <div class="banner warn">
+    <div class="grow"><b>Possibly the same person</b>, but with no shared email address —
+      {% for a, b in suggestions[:4] %}<span class="chip">{{ a.name }} ↔ {{ b.name }}</span>{% endfor %}
+      Turnout won't merge these for you. Check at the door.</div>
+  </div>
+  {% endif %}
+
+  {% if not people %}
+  <div class="banner info"><div class="grow">
+    Nobody yet. If you've published to a platform Turnout can read, press
+    <b>Fetch now</b> — otherwise sign-ups will appear as they come in.
+  </div></div>
+  {% endif %}
+
+  <form method="post" action="/events/{{ e.id }}/promote">
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table>
+      <thead><tr><th></th><th>Name</th><th>Contact</th><th>Signed up via</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for p in people %}
+        <tr>
+          <td>{% if p.status == 'waitlist' %}
+            <input type="checkbox" name="signup_id" value="{{ p.sources[0].signup_id }}" style="width:auto">
+          {% endif %}</td>
+          <td><b>{{ p.name }}</b>
+            {% if p.merged %}<span class="chip" style="border-color:var(--blue);color:var(--blue)">matched ×{{ p.sources|length }}</span>{% endif %}</td>
+          <td class="mono" style="font-size:.78rem">
+            {% if p.email %}{{ p.email }}
+            {% else %}<span style="color:var(--amber)">{{ p.handle or 'no email given' }}</span>{% endif %}</td>
+          <td>{% for s in p.sources %}<span class="chip">{{ s.label }}</span>{% endfor %}</td>
+          <td><span class="state s-{{ 'live' if p.status=='going' else 'drift' }}">{{ p.status }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if people|selectattr('status','equalto','waitlist')|list %}
+    <button class="ghost" type="submit" {{ 'disabled' if cap.full }}>Give the ticked people a place</button>
+    {% if cap.full %}<p class="hint">The room is full — raise the limit first.</p>{% endif %}
+  {% endif %}
+  </form>
+
+  <div class="card" style="border-color:var(--pink);margin-top:20px">
+    <h2 style="color:var(--pink)">Delete every sign-up</h2>
+    <p class="hint" style="margin-top:0">
+      Removes all {{ people|length }} people from Turnout immediately. Platforms that
+      keep their own copy will be named afterwards so you know what's left where.
+      This cannot be undone.
+    </p>
+    <form method="post" action="/events/{{ e.id }}/purge" style="display:flex;gap:8px;flex-wrap:wrap">
+      <input name="confirm" placeholder="type DELETE" style="max-width:170px" required>
+      <button class="hot" type="submit">Delete them</button>
+    </form>
+  </div>
+
+{# ------------------------------------------------------------------- link #}
+{% elif tab == 'link' %}
+  <h1>The link</h1>
+  <p class="hint" style="max-width:62ch">
+    One address for the leaflet, the sticker and the group chat. It shows every
+    platform the event is on and lets people use the account they already have.
+    Print it once — it won't change if a platform does.
+  </p>
+  <div class="card">
+    <h2>Give people this</h2>
+    <p class="mono" style="font-size:1.05rem;word-break:break-all">
+      <a href="/l/{{ e.slug }}">/l/{{ e.slug }}</a></p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-top:12px">
+      <img src="/l/{{ e.slug }}/qr.svg" alt="QR code for the public page"
+        style="width:150px;height:150px;background:#fff;padding:7px;border:2px solid var(--ink)">
+      <div style="flex:1;min-width:200px">
+        <p class="hint" style="margin-top:0">Right-click the code to save it for a
+          poster. It points at the same address, so a poster printed today still
+          works after you add another platform.</p>
+        <a class="btn ghost sm" href="/l/{{ e.slug }}">Open the public page</a>
+        <a class="btn ghost sm" href="/l/{{ e.slug }}.ics">Calendar file</a>
+      </div>
+    </div>
+  </div>
+
+{# -------------------------------------------------------------------- log #}
+{% else %}
+  <h1>What happened</h1>
+  <p class="hint" style="max-width:62ch">Every call Turnout made for you, and
+    everything it couldn't do. Newest first.</p>
+  <div class="card"><div class="log mono">
+    {% for l in log %}
+      <div><time>{{ l.at[11:19] }}</time><b>{{ l.code }}</b><span>{{ l.message }}</span></div>
+    {% else %}
+      <p class="hint">Nothing yet.</p>
+    {% endfor %}
+  </div></div>
+{% endif %}
+
+</div>
+{% endblock %}

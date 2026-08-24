@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Platform access — Turnout{% endblock %}
+
+{% block content %}
+<div class="wrap">
+  <h1>Platform access</h1>
+  <p class="hint" style="max-width:64ch">
+    Turnout works with no access at all — put the event up yourself and paste the
+    address in. Add a token here only for platforms you want Turnout to create and
+    manage the listing on. You can add, replace or remove access at any time, and
+    revoking it on the platform itself always works too.
+  </p>
+
+  {% if request.query_params.get('checked') %}
+  <div class="banner {{ 'warn' if 'not working' in request.query_params.get('checked') else 'info' }}">
+    <div class="grow">{{ request.query_params.get('checked') }}</div>
+  </div>
+  {% endif %}
+
+  {% if credentials %}
+  <div class="card">
+    <h2>Saved</h2>
+    {% for cr in credentials %}
+      {% set cfg = cr.config|from_json %}
+      {% set f = ACCESS_FIELDS.get(cr.kind, {}) %}
+      <div style="border:1.5px solid var(--rule);padding:12px;margin-bottom:10px">
+        <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+          <span class="mono" style="border:1.5px solid var(--ink);padding:2px 5px;font-size:.75rem">{{ CODES.get(cr.kind,'··') }}</span>
+          <b>{{ cr.label }}</b>
+          <span class="hint mono" style="font-size:.75rem">
+            {{ f.get('secret_label','Token') }} saved ·
+            ends {{ cr.secret[-4:] }}
+            {% if cfg and cfg.values()|select|list %}
+              · {{ cfg.values()|select|list|join(', ') }}
+            {% endif %}
+          </span>
+          <span class="spacer" style="flex:1"></span>
+          <form method="post" action="/access/{{ cr.id }}/check">
+            <button class="ghost sm" type="submit">Check it works</button></form>
+          <form method="post" action="/access/{{ cr.id }}/delete"
+                onsubmit="return confirm('Remove this access? Channels using it fall back to being links you manage yourself.')">
+            <button class="ghost sm" type="submit">Remove</button></form>
+        </div>
+
+        <details style="margin-top:9px">
+          <summary class="hint" style="cursor:pointer">Replace the token or change the destination</summary>
+          <form method="post" action="/access/{{ cr.id }}" style="margin-top:10px">
+            <input type="hidden" name="next" value="{{ next or '/access' }}">
+            <div class="row">
+              <label class="f"><span>Call it</span>
+                <input name="label" value="{{ cr.label }}"></label>
+              <label class="f"><span>New {{ f.get('secret_label','token')|lower }}</span>
+                <input name="secret" placeholder="leave blank to keep the current one"></label>
+              {% if f.get('extra') %}
+              <label class="f"><span>{{ f.extra[1] }}</span>
+                <input name="extra" value="{{ cfg.get(f.extra[0]) or '' }}"
+                  placeholder="{{ f.extra[2] }}"></label>
+              {% endif %}
+            </div>
+            <button class="ghost sm" type="submit">Save changes</button>
+          </form>
+        </details>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Add access</h2>
+    {% if not credentials %}
+    <p class="hint" style="margin-top:0">Nothing saved yet. That's a perfectly
+      good place to stay — everything except automatic publishing works without it.</p>
+    {% endif %}
+    <form method="post" action="/access">
+      <input type="hidden" name="next" value="{{ next or '/access' }}">
+      <label class="f"><span>Platform</span>
+        <select name="kind" id="kind" onchange="hint()">
+          {% for k in ['eventbrite','luma','meetup','atproto'] %}
+            <option value="{{ k }}" {{ 'selected' if open_kind == k }}>{{ NAMES[k] }}{% if k not in IMPLEMENTED %} — adapter not built yet{% endif %}</option>
+          {% endfor %}
+        </select></label>
+      <div class="row">
+        <label class="f"><span>Token or key</span>
+          <input name="secret" required autocomplete="off"></label>
+        <label class="f"><span>Destination (optional)</span>
+          <input name="extra" id="extra" placeholder="organisation, calendar or group id"></label>
+        <label class="f"><span>Call it</span>
+          <input name="label" placeholder="optional"></label>
+      </div>
+      <p class="hint" id="where"></p>
+      <button type="submit">Save access</button>
+    </form>
+    <p class="hint" style="margin-top:12px">
+      Tokens are stored in this server's database. Treat the <span class="mono">data/</span>
+      directory as credential-bearing, back it up accordingly, and revoke from the
+      platform if a laptop goes missing.
+    </p>
+  </div>
+
+  <p><a href="/">← Back to your events</a></p>
+</div>
+
+<script>
+/* Where to find each token, shown as the platform is chosen. Progressive
+   enhancement only — the form works fine with scripting off. */
+const WHERE = {
+{%- for k, v in ACCESS_FIELDS.items() %}
+  {{ k|tojson }}: {"hint": {{ v.get('secret_hint','')|tojson }},
+                   "extra": {{ (v.get('extra') or ['','',''])[2]|tojson }}},
+{%- endfor %}
+};
+function hint(){
+  const k = document.getElementById('kind').value;
+  const w = WHERE[k] || {hint:'', extra:''};
+  document.getElementById('where').textContent = w.hint;
+  document.getElementById('extra').placeholder = w.extra;
+}
+hint();
+</script>
+{% endblock %}

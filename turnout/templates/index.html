@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap">
+
+  <h1>Your events</h1>
+
+  {% if not events %}
+  <div class="banner info">
+    <div class="grow">
+      Nothing here yet. Put in a title and a date — you can add everything else,
+      and every platform you're posting to, afterwards.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Start an event</h2>
+    <form method="post" action="/events">
+      <div class="row">
+        <label class="f"><span>What is it called</span>
+          <input name="title" required placeholder="Public meeting on the retrofit plan"></label>
+        <label class="f"><span>When does it start</span>
+          <input name="starts_at" type="datetime-local" required></label>
+      </div>
+      <button type="submit">Start it</button>
+    </form>
+  </div>
+
+  {% for item in events %}
+  {% set e = item.e %}{% set c = item.cap %}
+  <div class="card">
+    <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">
+        <h3 style="margin:0"><a href="/events/{{ e.id }}">{{ e.title }}</a></h3>
+        <p class="hint mono" style="margin:2px 0 0">
+          {{ e.starts_at|replace("T"," ") }}{% if e.venue %} · {{ e.venue }}{% endif %}
+        </p>
+      </div>
+      <div style="text-align:right">
+        {% if c.uncapped %}
+          <div class="big">{{ c.going }}<small> signed up</small></div>
+        {% else %}
+          <div class="big">{{ c.going }}<small>/{{ c.sellable }}</small></div>
+        {% endif %}
+        {% if c.waitlist %}<p class="hint" style="margin:0">{{ c.waitlist }} waiting</p>{% endif %}
+      </div>
+      <div style="display:flex;gap:7px;align-items:center">
+        <span class="state s-{{ e.status if e.status != 'draft' else 'idle' }}">{{ e.status }}</span>
+        <a class="btn ghost sm" href="/l/{{ e.slug }}">Public link</a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="card">
+    <h2>Platform access</h2>
+    <p class="hint" style="margin-top:0">
+      Turnout needs no accounts to be useful — you publish on the platforms
+      yourself and paste the addresses in. Add a token only where you want
+      Turnout to create and manage the listing for you.
+    </p>
+    <a class="btn ghost" href="/access">Manage platform access</a>
+  </div>
+
+</div>
+{% endblock %}
