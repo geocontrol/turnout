@@ -17,6 +17,17 @@ from . import db
 from .adapters import CODES, MANUAL, NAMES, Result, can, capability, get
 from .merge import merge_people
 
+# What an adapter is allowed to keep on its channel between calls: the ids of
+# things it made on the platform, so a half-finished publish can be picked up
+# rather than started again. Anything not named here is dropped, so a new
+# adapter that needs to remember something has to say so here.
+ADAPTER_CONFIG = {
+    "ticket_class_id",      # eventbrite
+    "record_uri",           # atproto, when it lands
+    "occurrence_id",        # ticket tailor: the date within the series
+    "ticket_type_id",       # ticket tailor
+}
+
 # Fields whose change is worth pushing to a platform. Editing a note to self
 # should not generate five API calls.
 PUSHABLE = ["title", "strap", "body", "starts_at", "ends_at",
@@ -120,8 +131,7 @@ def _apply(conn, event: dict, channel: dict, res: Result, default_state: str) ->
         fields.append("url = ?"); params.append(res.url)
     if res.data:
         cfg = json.loads(channel.get("config") or "{}")
-        cfg.update({k: v for k, v in res.data.items()
-                    if k in ("ticket_class_id", "record_uri")})
+        cfg.update({k: v for k, v in res.data.items() if k in ADAPTER_CONFIG})
         fields.append("config = ?"); params.append(json.dumps(cfg))
 
     state = "failed" if not res.ok else ("manual" if res.manual else default_state)

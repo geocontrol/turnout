@@ -13,6 +13,7 @@ from turnout.adapters import KINDS  # noqa: E402
 from turnout.adapters.eventbrite import EventbriteAdapter  # noqa: E402
 from turnout.adapters.luma import LumaAdapter  # noqa: E402
 from turnout.adapters.actionnetwork import ActionNetworkAdapter  # noqa: E402
+from turnout.adapters.tickettailor import TicketTailorAdapter  # noqa: E402
 from turnout.merge import merge_people, suggest_merges  # noqa: E402
 
 
@@ -923,3 +924,157 @@ def test_a_listing_check_that_fails_changes_nothing(conn, monkeypatch):
     assert service.recheck_listings(conn, "E") == []
     ch = dict(conn.execute("SELECT * FROM channel WHERE id='C1'").fetchone())
     assert ch["url"] == "https://evb/1" and ch["state"] == "live"
+
+
+# ------------------------------------------------------------- ticket tailor
+
+def _tt(handler):
+    return httpx.Client(transport=httpx.MockTransport(handler),
+                        base_url="https://api.tickettailor.com")
+
+
+def test_ticket_tailor_publishes_series_date_ticket_then_status():
+    """Four calls, in that order — nothing can be booked without a ticket type."""
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        body = dict(httpx.QueryParams(request.content.decode()))
+        if request.url.path == "/v1/event_series":
+            assert body["name"] == "Public meeting"
+            assert body["max_tickets_sold_per_occurrence"] == "120"
+            assert body["waitlist_active"] == "no_tickets_available"
+            assert "On the retrofit plan" in body["description"]
+            return httpx.Response(201, json={"id": "es_1", "status": "draft",
+                                             "url": "https://buytickets.at/x"})
+        if request.url.path.endswith("/events"):
+            # the clock time as typed, not shifted into UTC
+            assert body["start_date"] == "2026-09-17" and body["start_time"] == "19:00:00"
+            assert body["end_date"] == "2026-09-17" and body["end_time"] == "21:00:00"
+            return httpx.Response(201, json={"id": "ev_1",
+                                             "url": "https://buytickets.at/x/ev_1"})
+        if request.url.path.endswith("/ticket_types"):
+            assert body["price"] == "0" and body["quantity"] == "120"
+            return httpx.Response(201, json={"id": "tt_1", "type": "free"})
+        assert body["status"] == "PUBLISHED"
+        return httpx.Response(200, json={"id": "es_1", "status": "published"})
+
+    a = TicketTailorAdapter({"secret": "k"}, client=_tt(handler))
+    res = a.publish(EVENT, {"policy": "waitlist"}, quantity=120)
+
+    assert res.ok and res.external_id == "es_1"
+    assert res.url == "https://buytickets.at/x/ev_1"          # the date, not the series
+    assert res.data == {"occurrence_id": "ev_1", "ticket_type_id": "tt_1"}
+    assert calls == ["/v1/event_series", "/v1/event_series/es_1/events",
+                     "/v1/event_series/es_1/ticket_types",
+                     "/v1/event_series/es_1/status"]
+
+
+def test_ticket_tailor_carries_back_what_it_made_before_failing():
+    """Four calls is four chances to end up with two events."""
+    def handler(request):
+        if request.url.path == "/v1/event_series":
+            return httpx.Response(201, json={"id": "es_1", "url": "https://buytickets.at/x"})
+        if request.url.path.endswith("/events"):
+            return httpx.Response(201, json={"id": "ev_1"})
+        return httpx.Response(400, json={"status": 400, "error_code": "bad_request",
+                                         "message": "quantity is too large"})
+
+    res = TicketTailorAdapter({"secret": "k"}, client=_tt(handler)).publish(
+        EVENT, {}, quantity=99999)
+
+    assert not res.ok and "quantity is too large" in res.message
+    assert res.external_id == "es_1" and res.data["occurrence_id"] == "ev_1"
+
+
+def test_ticket_tailor_resumes_instead_of_making_a_second_event():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "es_1", "status": "draft",
+                                             "url": "https://buytickets.at/x"})
+        if request.url.path.endswith("/ticket_types"):
+            return httpx.Response(201, json={"id": "tt_1"})
+        return httpx.Response(200, json={"id": "es_1", "status": "published"})
+
+    a = TicketTailorAdapter({"secret": "k"}, client=_tt(handler))
+    res = a.publish(EVENT, {"external_id": "es_1",
+                            "config": '{"occurrence_id": "ev_1"}'}, quantity=50)
+
+    assert res.ok and "picked up the event already created" in res.message
+    assert "/v1/event_series" not in [c for c in calls if c == "/v1/event_series"]
+    assert res.data == {"occurrence_id": "ev_1", "ticket_type_id": "tt_1"}
+
+
+def test_ticket_tailor_closes_sales_rather_than_taking_the_page_down():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["body"] = dict(httpx.QueryParams(request.content.decode()))
+        return httpx.Response(200, json={"id": "es_1", "status": "sales_closed"})
+
+    res = TicketTailorAdapter({"secret": "k"}, client=_tt(handler)).set_open(
+        EVENT, {"external_id": "es_1"}, open_=False, policy="close")
+
+    assert res.ok and seen["path"] == "/v1/event_series/es_1/status"
+    assert seen["body"]["status"] == "CLOSE_SALES"            # not DRAFT, not deleted
+
+
+def test_ticket_tailor_tickets_are_paged_and_voided_ones_carried_through():
+    first = [{"id": f"ti_{i}", "full_name": f"Person {i}", "email": f"p{i}@x.com",
+              "status": "valid", "created_at": 1789000000} for i in range(100)]
+    second = [{"id": "ti_x", "first_name": "Rae", "last_name": "Okonjo",
+               "email": "r@x.com", "status": "voided"}]
+
+    def handler(request):
+        after = request.url.params.get("starting_after")
+        assert request.url.params["event_series_id"] == "es_1"
+        return httpx.Response(200, json={"data": second if after else first,
+                                         "links": {}})
+
+    got = TicketTailorAdapter({"secret": "k"}, client=_tt(handler)).fetch_signups(
+        EVENT, {"external_id": "es_1"})
+
+    assert len(got) == 101 and got[-1].external_id == "ti_x"
+    assert got[-1].status == "cancelled" and got[-1].name == "Rae Okonjo"
+    assert got[0].created_at == "2026-09-10T00:26:40+00:00"   # unix seconds in, ISO out
+
+
+def test_ticket_tailor_key_check_names_the_box_office():
+    def handler(request):
+        assert request.url.path == "/v1/overview"
+        return httpx.Response(200, json={"box_office_name": "Tenants' Union"})
+
+    a = TicketTailorAdapter({"secret": "k"}, client=_tt(handler))
+    assert a.check() == "box office Tenants' Union"
+    # and the key travels as HTTP basic, which is what their examples use
+    assert isinstance(TicketTailorAdapter({"secret": "k"}).client.auth, httpx.BasicAuth)
+
+
+def test_ticket_tailor_a_closed_series_is_still_a_live_listing():
+    """Closed sales is a page people can still read; deleted is not."""
+    def handler(request):
+        return httpx.Response(200, json={"id": "es_1", "status": "sales_closed",
+                                         "url": "https://buytickets.at/x"})
+
+    state = TicketTailorAdapter({"secret": "k"}, client=_tt(handler)).remote_state(
+        {"external_id": "es_1"})
+    assert state["state"] == "live"
+
+    def gone(request):
+        return httpx.Response(404, json={"status": 404, "message": "Not found"})
+
+    state = TicketTailorAdapter({"secret": "k"}, client=_tt(gone)).remote_state(
+        {"external_id": "es_1"})
+    assert state["state"] == "gone"
+
+
+def test_an_event_with_no_end_still_gets_a_date_ticket_tailor_accepts():
+    """end_date is required there; most groups never set an end here."""
+    payload = TicketTailorAdapter({"secret": "k"})._occurrence_payload(
+        {"title": "T", "starts_at": "2026-09-17T19:00", "ends_at": None})
+    assert payload == {"start_date": "2026-09-17", "end_date": "2026-09-17",
+                       "start_time": "19:00:00"}

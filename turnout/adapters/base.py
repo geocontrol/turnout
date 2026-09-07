@@ -28,6 +28,14 @@ CAPABILITIES: dict[str, dict[str, str]] = {
         "capacity": YES, "waitlist": PARTIAL, "close": PARTIAL,
         "read_signups": YES, "emails": YES, "live": YES,
     },
+    # Everything Turnout asks about is a real endpoint here: a cap, a waiting
+    # list that opens when the cap is reached, a close that leaves the page
+    # readable, and an attendee list with email addresses on it.
+    "tickettailor": {
+        "create": YES, "update": YES, "cancel": YES,
+        "capacity": YES, "waitlist": YES, "close": YES,
+        "read_signups": YES, "emails": YES, "live": YES,
+    },
     # The odd one out, and on purpose. Action Network is the group's own list
     # rather than another shop window: events posted through its API get no
     # page anybody can sign, so the organiser makes the event there and
@@ -65,11 +73,12 @@ CAPABILITIES: dict[str, dict[str, str]] = {
 
 CODES = {"manual": "··", "eventbrite": "EB", "luma": "LU",
          "atproto": "AT", "facebook": "FB", "meetup": "MU",
-         "actionnetwork": "AN"}
+         "actionnetwork": "AN", "tickettailor": "TT"}
 
 NAMES = {"manual": "Typed-in link", "eventbrite": "Eventbrite", "luma": "Luma",
          "atproto": "atmo.rsvp / atproto", "facebook": "Facebook Events",
-         "meetup": "Meetup", "actionnetwork": "Action Network"}
+         "meetup": "Meetup", "actionnetwork": "Action Network",
+         "tickettailor": "Ticket Tailor"}
 
 # What the organiser is told, in the interface, about each channel's limits.
 NOTES = {
@@ -90,6 +99,13 @@ NOTES = {
                 "the composer; paste the resulting address back in.",
     "meetup": "Needs a Meetup Pro subscription. Gives you names but never "
               "email addresses.",
+    "tickettailor": "Free tickets cost nothing up to a yearly allowance — "
+                    "check their current pricing. A key belongs to one box "
+                    "office, so the key is the destination. Times are read in "
+                    "the box office's timezone, so set that to the event's. "
+                    "Closing sign-ups closes sales and leaves the page "
+                    "readable; the waiting list opens when the tickets run "
+                    "out.",
     "actionnetwork": "You make the event in Action Network — events posted "
                      "through its API get no page people can sign — and paste "
                      "the address in. Turnout then reads the RSVPs back with "

@@ -6,19 +6,22 @@ from . import manual  # noqa: F401,E402  registers manual + facebook
 from . import eventbrite  # noqa: F401,E402  registers eventbrite
 from . import luma  # noqa: F401,E402  registers luma
 from . import actionnetwork  # noqa: F401,E402  registers actionnetwork
+from . import tickettailor  # noqa: F401,E402  registers tickettailor
 
-KINDS = ["eventbrite", "luma", "actionnetwork", "atproto", "facebook",
-         "meetup", "manual"]
+KINDS = ["eventbrite", "luma", "tickettailor", "actionnetwork", "atproto",
+         "facebook", "meetup", "manual"]
 
 # Kinds with a working adapter today. The rest are declared in the
 # capability matrix so the interface can be honest about what is coming,
 # but selecting one gets you the manual behaviour.
-IMPLEMENTED = {"manual", "facebook", "eventbrite", "luma", "actionnetwork"}
+IMPLEMENTED = {"manual", "facebook", "eventbrite", "luma", "actionnetwork",
+               "tickettailor"}
 
 # Kinds that need saved access before Turnout can drive them. A channel of
 # one of these kinds without a credential is not broken — it just behaves
 # like a typed-in link until access is added.
-NEEDS_ACCESS = {"eventbrite", "luma", "meetup", "atproto", "actionnetwork"}
+NEEDS_ACCESS = {"eventbrite", "luma", "meetup", "atproto", "actionnetwork",
+                "tickettailor"}
 
 # What to ask for, per kind, so the form can be specific rather than generic.
 ACCESS_FIELDS = {
@@ -35,6 +38,13 @@ ACCESS_FIELDS = {
         "secret_label": "API key",
         "secret_hint": "Luma → Calendar settings → Options → API "
                        "(needs Luma Plus). The key covers that one calendar.",
+    },
+    # Like Luma, no second field: the key carries the box office with it.
+    "tickettailor": {
+        "secret_label": "API key",
+        "secret_hint": "Ticket Tailor → Box office settings → API "
+                       "(app.tickettailor.com/box-office/api). The key covers "
+                       "that one box office.",
     },
     # Like Luma, no second field: an Action Network key is issued for one
     # group's list and carries the destination with it.

@@ -9,8 +9,8 @@ platforms that own the relationship and organising suites priced for national
 NGOs.
 
 This is **steps 1–3 of the build**: the event record and public link, the
-Eventbrite, Luma and Action Network adapters, and the consolidated sign-up
-list. It is a usable product
+Eventbrite, Luma, Ticket Tailor and Action Network adapters, and the
+consolidated sign-up list. It is a usable product
 for one real group. Everything after this is widening.
 
 ## Quick start
@@ -61,6 +61,20 @@ and no guest delete, and the capability matrix says so rather than pretending.
 A Luma key belongs to one calendar, so the key is the whole destination —
 there is no calendar id to type in, and *Check it works* names the calendar
 the key opened.
+
+**2b (again) — Ticket Tailor.** The most capable of the lot, and the least
+awkward: everything Turnout asks about is a real endpoint. Publishing is four
+calls, because Ticket Tailor keeps what an event *is* apart from when it
+happens — series, then the date, then a free ticket type, then status
+`PUBLISHED`. Each step records what it made, so a failure halfway is picked
+up rather than started again.
+
+Closing sign-ups sets `CLOSE_SALES`, which is a real close that leaves the
+page readable, and the waiting list is set to open only when the tickets run
+out. Times are sent exactly as typed: Ticket Tailor has no per-event timezone
+and reads the clock in the box office's, so **set the box office timezone to
+the event's**. A key belongs to one box office, so the key is the whole
+destination, and *Check it works* names the box office it opened.
 
 **2c — Action Network.** The odd one, and deliberately so. Action Network's
 own documentation says events posted through its API *"will not be given a
@@ -155,10 +169,11 @@ turnout/
     manual.py     typed-in links, and assisted Facebook
     eventbrite.py the first real one
     luma.py       the second: one call to publish, guest list with emails
+    tickettailor.py   series, date, ticket, publish — and a real close
     actionnetwork.py  reads RSVPs back out of the group's own list
   templates/      base, index, event, list; _fields.html is the event's own
                   fields, rendered by both the start form and the event page
-tests/            57 tests, no network
+tests/            65 tests, no network
 ```
 
 ## Status
@@ -172,6 +187,9 @@ tests/            57 tests, no network
   **has not been run against a live Luma Plus calendar**. Verify the guest
   fields on first real use. Note that API access needs Luma Plus, so for
   most groups this remains the paid option and step 1 remains the main path.
+- The Ticket Tailor adapter is written against the v1 documentation and
+  tested the same way, but **has not been run against a live box office**.
+  Verify the ticket-type fields on first real use.
 - The Action Network adapter is written against the v2 documentation and
   tested the same way, but **has not been run against a live API key**.
   Verify the attendance statuses on first real use. API access needs partner
