@@ -43,7 +43,9 @@
         </div>
 
         <details style="margin-top:9px">
-          <summary class="hint" style="cursor:pointer">Replace the token or change the destination</summary>
+          <summary class="hint" style="cursor:pointer">Replace the
+            {{ f.get('secret_label','token')|lower }}{% if f.get('extra') %}
+            or change the destination{% endif %}</summary>
           <form method="post" action="/access/{{ cr.id }}" style="margin-top:10px">
             <input type="hidden" name="next" value="{{ next or '/access' }}">
             <div class="row">
@@ -75,14 +77,16 @@
       <input type="hidden" name="next" value="{{ next or '/access' }}">
       <label class="f"><span>Platform</span>
         <select name="kind" id="kind" onchange="hint()">
-          {% for k in ['eventbrite','luma','meetup','atproto'] %}
+          {# Driven by ACCESS_FIELDS, so a platform that gains a saved
+             credential appears here without a second list to remember. #}
+          {% for k in ACCESS_FIELDS %}
             <option value="{{ k }}" {{ 'selected' if open_kind == k }}>{{ NAMES[k] }}{% if k not in IMPLEMENTED %} — adapter not built yet{% endif %}</option>
           {% endfor %}
         </select></label>
       <div class="row">
         <label class="f"><span>Token or key</span>
           <input name="secret" required autocomplete="off"></label>
-        <label class="f"><span>Destination (optional)</span>
+        <label class="f" id="extra-field"><span id="extra-label">Destination (optional)</span>
           <input name="extra" id="extra" placeholder="organisation, calendar or group id"></label>
         <label class="f"><span>Call it</span>
           <input name="label" placeholder="optional"></label>
@@ -106,14 +110,19 @@
 const WHERE = {
 {%- for k, v in ACCESS_FIELDS.items() %}
   {{ k|tojson }}: {"hint": {{ v.get('secret_hint','')|tojson }},
+                   "label": {{ (v.get('extra') or ['','',''])[1]|tojson }},
                    "extra": {{ (v.get('extra') or ['','',''])[2]|tojson }}},
 {%- endfor %}
 };
 function hint(){
   const k = document.getElementById('kind').value;
-  const w = WHERE[k] || {hint:'', extra:''};
+  const w = WHERE[k] || {hint:'', label:'', extra:''};
   document.getElementById('where').textContent = w.hint;
   document.getElementById('extra').placeholder = w.extra;
+  /* A Luma key carries its own calendar, so there is nothing to say here.
+     Hiding the box beats leaving an empty one somebody feels they must fill. */
+  document.getElementById('extra-field').style.display = w.label ? '' : 'none';
+  if (w.label) document.getElementById('extra-label').textContent = w.label;
 }
 hint();
 </script>

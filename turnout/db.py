@@ -140,6 +140,19 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def last_log_id(conn: sqlite3.Connection, event_id: str) -> int:
+    """The high-water mark of the log, so an action can say what it just did.
+
+    Actions redirect after they run — which is right, a refresh must not
+    publish twice — and that throws the per-channel report away. Taking this
+    before the action and passing it back in the URL lets the page render
+    exactly the lines that action wrote, and nothing older.
+    """
+    row = conn.execute("SELECT MAX(id) AS m FROM log WHERE event_id = ?",
+                       (event_id,)).fetchone()
+    return (row["m"] if row else None) or 0
+
+
 @contextmanager
 def tx(conn: sqlite3.Connection):
     try:

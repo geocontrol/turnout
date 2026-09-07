@@ -78,33 +78,71 @@ def index(request: Request, _=Depends(require_organiser)):
     for r in rows:
         c = cap.read(conn, r["id"])
         events.append({"e": dict(r), "cap": c})
-    return templates.TemplateResponse(request, "index.html", {"events": events})
+    return templates.TemplateResponse(request, "index.html", {
+        "events": events,
+        "options": service.publishing_options(conn),
+    })
 
 
 @app.post("/events")
-def create_event(title: str = Form(...), starts_at: str = Form(...),
-                 _=Depends(require_organiser)):
+async def create_event(request: Request, _=Depends(require_organiser),
+                       title: str = Form(...), strap: str = Form(""),
+                       body: str = Form(""), starts_at: str = Form(...),
+                       ends_at: str = Form(""), venue: str = Form(""),
+                       address: str = Form(""), accessibility: str = Form(""),
+                       contact: str = Form(""), capacity: str = Form(""),
+                       oversell_pct: int = Form(0),
+                       capacity_mode: str = Form("pool")):
+    """Everything the home page asked for, in one go.
+
+    The whole event and every platform it should appear on arrive together,
+    because the alternative — a title and a date, then five more screens — is
+    how a group ends up with an event published without its access notes.
+    Only the title and the start are required; the rest can stay blank and be
+    filled in later on the event page, which is the same form.
+    """
     conn = get_conn()
     eid = db.new_id()
     slug = service.slugify(title, eid[:4])
     conn.execute(
-        """INSERT INTO event (id, slug, title, starts_at, created_at, updated_at)
-           VALUES (?,?,?,?,?,?)""",
-        (eid, slug, title.strip(), starts_at, db.now(), db.now()))
-    conn.commit()
+        """INSERT INTO event (id, slug, title, strap, body, starts_at, ends_at,
+           venue, address, accessibility, contact, capacity, oversell_pct,
+           capacity_mode, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (eid, slug, title.strip(), strap, body, starts_at, ends_at or None,
+         venue, address, accessibility, contact,
+         int(capacity) if capacity.strip() else None, oversell_pct,
+         capacity_mode, db.now(), db.now()))
     db.log(conn, eid, "··", "event created in Turnout")
+
+    # Platforms are ticked on the same form, each with an optional address for
+    # anything the organiser has already put up themselves.
+    form = await request.form()
+    for kind in form.getlist("kinds"):
+        if kind not in KINDS:
+            continue
+        service.add_channel(conn, eid, kind,
+                            url=str(form.get(f"url_{kind}", "")).strip())
+    conn.commit()
     return RedirectResponse(f"/events/{eid}", status_code=303)
 
 
 @app.get("/events/{eid}", response_class=HTMLResponse)
 def event_page(eid: str, request: Request, tab: str = "event",
-               _=Depends(require_organiser)):
+               since: int | None = None, _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
     people = service.people(conn, ev["id"])
+    outcome = []
+    if since is not None:
+        outcome = conn.execute(
+            "SELECT * FROM log WHERE event_id = ? AND id > ? ORDER BY id",
+            (ev["id"], since)).fetchall()
     return templates.TemplateResponse(request, "event.html", {
         "e": ev,
         "tab": tab,
+        "outcome": outcome,
+        "acted": since is not None,
         "channels": service.get_channels(conn, ev["id"]),
         "cap": cap.read(conn, ev["id"]),
         "drift": service.drift(ev),
@@ -146,15 +184,10 @@ def add_channel(eid: str, kind: str = Form(...), label: str = Form(""),
                 policy: str = Form("waitlist"), _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
-    state = "live" if (url.strip() and kind in ("manual", "facebook")) else "idle"
-    conn.execute(
-        """INSERT INTO channel (id, event_id, kind, label, url, allocation,
-           policy, state, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (db.new_id(), ev["id"], kind, label or NAMES.get(kind, kind), url.strip(),
-         int(allocation) if allocation.strip() else None, policy, state,
-         db.now(), db.now()))
+    service.add_channel(conn, ev["id"], kind, label=label, url=url,
+                        allocation=int(allocation) if allocation.strip() else None,
+                        policy=policy)
     conn.commit()
-    db.log(conn, ev["id"], CODES.get(kind, "··"), f"channel added ({NAMES.get(kind, kind)})")
     return RedirectResponse(f"/events/{ev['id']}?tab=channels", status_code=303)
 
 
@@ -196,33 +229,44 @@ def delete_channel(cid: str, _=Depends(require_organiser)):
 def do_publish(eid: str, _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
+    since = db.last_log_id(conn, ev["id"])
     service.publish(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels", status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
+                            status_code=303)
 
 
 @app.post("/events/{eid}/push")
 def do_push(eid: str, _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
+    since = db.last_log_id(conn, ev["id"])
     service.push_update(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels", status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
+                            status_code=303)
 
 
 @app.post("/events/{eid}/close")
 def do_close(eid: str, open_: str = Form(""), _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
+    since = db.last_log_id(conn, ev["id"])
     service.set_open(conn, ev["id"], bool(open_))
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels", status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
+                            status_code=303)
 
 
 @app.post("/events/{eid}/sync")
 def do_sync(eid: str, _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
+    since = db.last_log_id(conn, ev["id"])
+    # Ask first whether the listings are still there. A deleted one has to be
+    # noticed here rather than by somebody following a link off a poster.
+    service.recheck_listings(conn, ev["id"])
     service.sync_signups(conn, ev["id"])
     service.auto_close_if_full(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=signups", status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=signups&since={since}",
+                            status_code=303)
 
 
 @app.post("/events/{eid}/promote")
@@ -320,8 +364,11 @@ def check_access(cid: str, _=Depends(require_organiser)):
     cred = dict(row)
     try:
         adapter = get(cred["kind"], cred)
-        who = adapter.whoami() if hasattr(adapter, "whoami") else None
-        msg = f"working{' — organisation ' + str(who) if who else ''}"
+        # Each adapter names what its key actually opened — an Eventbrite
+        # organisation, a Luma calendar — because a token pasted from the
+        # wrong account is otherwise silent until an event lands in it.
+        who = adapter.check() if hasattr(adapter, "check") else None
+        msg = f"working{' — ' + str(who) if who else ''}"
     except Exception as exc:
         msg = f"not working: {exc}"
     return RedirectResponse(f"/access?checked={quote(msg)}", status_code=303)

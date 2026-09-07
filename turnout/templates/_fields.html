@@ -1,0 +1,76 @@
+{# The event's own fields, in one place.
+
+   The home page asks for all of them when the event is started and the event
+   page asks for the same ones again afterwards. Two copies of a form this
+   size drift — someone adds a field to one screen and the other quietly
+   stops asking for it — so both render this.
+
+   `e` is the event, or an empty mapping when there isn't one yet. `cap` is
+   only passed once the event exists and there are places to count. #}
+
+{% macro event_fields(e, cap=None) %}
+<div class="card">
+  <h2>What it is</h2>
+  <label class="f"><span>Title</span>
+    <input name="title" value="{{ e.title or '' }}" required
+      placeholder="Public meeting on the retrofit plan"></label>
+  <label class="f"><span>One line summary</span>
+    <input name="strap" value="{{ e.strap or '' }}"
+      placeholder="What the plan means for our block, and what we do next"></label>
+  <label class="f"><span>Description</span>
+    <textarea name="body">{{ e.body or '' }}</textarea></label>
+</div>
+
+<div class="card">
+  <h2>When and where</h2>
+  <div class="row">
+    <label class="f"><span>Starts</span>
+      <input name="starts_at" type="datetime-local" value="{{ e.starts_at or '' }}" required></label>
+    <label class="f"><span>Ends</span>
+      <input name="ends_at" type="datetime-local" value="{{ e.ends_at or '' }}"></label>
+  </div>
+  <div class="row">
+    <label class="f"><span>Venue</span>
+      <input name="venue" value="{{ e.venue or '' }}" placeholder="Jubilee Hall"></label>
+    <label class="f"><span>Address</span>
+      <input name="address" value="{{ e.address or '' }}"></label>
+  </div>
+  <label class="f"><span>Access notes</span>
+    <input name="accessibility" value="{{ e.accessibility or '' }}"
+      placeholder="Step-free, hearing loop, creche in the side room"></label>
+  <p class="hint">Access notes go on the public page and into every listing.
+    Put them in — people plan around them.</p>
+</div>
+
+<div class="card">
+  <h2>How many fit</h2>
+  <div class="row">
+    <label class="f"><span>The room holds</span>
+      <input name="capacity" type="number" min="1" value="{{ e.capacity or '' }}"
+        placeholder="leave blank for no limit"></label>
+    <label class="f"><span>Offer this much over</span>
+      <input name="oversell_pct" type="number" min="0" max="100"
+        value="{{ e.oversell_pct or 0 }}"></label>
+    <label class="f"><span>Divide places</span>
+      <select name="capacity_mode">
+        <option value="pool" {{ 'selected' if (e.capacity_mode or 'pool') == 'pool' }}>Shared between platforms</option>
+        <option value="allocated" {{ 'selected' if e.capacity_mode == 'allocated' }}>Fixed share each</option>
+      </select></label>
+  </div>
+  <p class="hint">
+    <b>Shared</b> tells every platform how many are left and closes them all when
+    it fills — nothing goes unused, but two people signing up at the same moment
+    can both get in. <b>Fixed share</b> gives each platform its own number, so
+    nothing oversells but places can sit unused on one platform while another
+    turns people away.
+    {% if cap and not cap.uncapped and e.capacity_mode == 'allocated'
+          and cap.allocation_drift %}
+    <br><b style="color:#B4362F">The shares add up to {{ cap.allocated_total }},
+    {{ 'more' if cap.allocation_drift > 0 else 'fewer' }} than the
+    {{ cap.sellable }} places you're offering.</b>
+    {% endif %}
+  </p>
+  <label class="f"><span>Who to contact</span>
+    <input name="contact" value="{{ e.contact or '' }}"></label>
+</div>
+{% endmacro %}

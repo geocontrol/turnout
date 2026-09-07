@@ -27,24 +27,9 @@ from datetime import datetime, timezone
 import httpx
 
 from .base import PARTIAL, Result, RemoteSignup, register
+from .base import utc_iso as _utc
 
 BASE = "https://www.eventbriteapi.com/v3"
-
-
-def _utc(local_iso: str, tz: str) -> str:
-    """Eventbrite wants UTC as 'YYYY-MM-DDTHH:MM:SSZ' plus a timezone name.
-
-    We keep the group's wall-clock time as typed and let the platform do the
-    conversion, so a change of daylight saving never silently moves an event.
-    """
-    try:
-        from zoneinfo import ZoneInfo
-        dt = datetime.fromisoformat(local_iso)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo(tz))
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
-        return local_iso
 
 
 @register
@@ -95,6 +80,34 @@ class EventbriteAdapter:
         self.organization_id = orgs[0]["id"]
         return self.organization_id
 
+    def check(self) -> str:
+        """What this token opens, in words the organiser can recognise."""
+        return f"organisation {self.whoami()}"
+
+    def remote_state(self, channel: dict) -> dict | None:
+        """What Eventbrite says about the listing we recorded.
+
+        Turnout's own `state` says what happened last time it called; it does
+        not know that somebody deleted the event in Eventbrite half an hour
+        ago. Nobody finds out until a person follows the link off a poster,
+        so it is worth one call to ask.
+        """
+        eid = channel.get("external_id")
+        if not eid:
+            return None
+        try:
+            ev = self._call("GET", f"/events/{eid}/")
+        except Exception as exc:
+            if "404" in str(exc):
+                return {"state": "gone", "status": "not found", "url": ""}
+            raise
+        status = (ev.get("status") or "").lower()
+        if status in ("deleted", "canceled", "cancelled"):
+            return {"state": "gone", "status": status, "url": ev.get("url", "")}
+        if status == "draft":
+            return {"state": "draft", "status": status, "url": ev.get("url", "")}
+        return {"state": "live", "status": status, "url": ev.get("url", "")}
+
     # ------------------------------------------------------------- payload
 
     def _event_payload(self, event: dict) -> dict:
@@ -116,32 +129,63 @@ class EventbriteAdapter:
     # ------------------------------------------------------------ actions
 
     def publish(self, event: dict, channel: dict, quantity: int | None) -> Result:
+        """Create, ticket, publish — resuming rather than starting over.
+
+        Three calls, and a failure at the second or third leaves a real draft
+        event on Eventbrite. So the id of anything created is carried back on
+        the failure too, and a second attempt picks up from whichever step is
+        missing. Pressing the button twice must never leave a group with two
+        events and no way to tell which one the posters point at.
+        """
+        eid = channel.get("external_id")
+        url = channel.get("url") or ""
+        tid = _cfg(channel).get("ticket_class_id")
+        made_it_now = False
         try:
-            org = self.whoami()
-            created = self._call("POST", f"/organizations/{org}/events/",
-                                 json=self._event_payload(event))
-            eid = created["id"]
-
-            ticket = self._call(
-                "POST", f"/events/{eid}/ticket_classes/",
-                json={"ticket_class": {
-                    "name": "Free entry",
-                    "free": True,
-                    "quantity_total": quantity or event.get("capacity") or 1000,
-                    "minimum_quantity": 1,
-                    "maximum_quantity": 4,
-                }},
-            )
-            self._call("POST", f"/events/{eid}/publish/")
-
-            return Result.done(
-                "created, ticketed and published",
-                external_id=eid,
-                url=created.get("url", ""),
-                data={"ticket_class_id": ticket["id"]},
-            )
+            if eid and (self.remote_state(channel) or {}).get("state") == "gone":
+                # Deleted in Eventbrite since. Resuming it would fail forever;
+                # a fresh one is what the organiser is asking for.
+                eid, tid, url = None, None, ""
+            if not eid:
+                org = self.whoami()
+                created = self._call("POST", f"/organizations/{org}/events/",
+                                     json=self._event_payload(event))
+                eid, url, made_it_now = created["id"], created.get("url", ""), True
         except Exception as exc:
             return Result.failed(str(exc))
+
+        try:
+            if not tid:
+                ticket = self._call(
+                    "POST", f"/events/{eid}/ticket_classes/",
+                    json={"ticket_class": {
+                        "name": "Free entry",
+                        "free": True,
+                        "quantity_total": quantity or event.get("capacity") or 1000,
+                        "minimum_quantity": 1,
+                        "maximum_quantity": 4,
+                    }},
+                )
+                tid = ticket["id"]
+            answer = self._call("POST", f"/events/{eid}/publish/")
+            if answer.get("published") is False:
+                # A 200 that says it did not publish. Reported as success once,
+                # which is how a draft nobody could open ended up on a poster.
+                raise RuntimeError(
+                    "Eventbrite would not publish it — it is still a draft "
+                    "there. Open it in Eventbrite; it will name what it wants.")
+            if not url:
+                url = (self.remote_state({"external_id": eid}) or {}).get("url", "")
+        except Exception as exc:
+            # The event exists whatever went wrong after it was created. Hand
+            # its id back so the next attempt finishes this one.
+            return Result.failed(str(exc), external_id=eid, url=url,
+                                 data={"ticket_class_id": tid} if tid else {})
+
+        return Result.done(
+            "created, ticketed and published" if made_it_now
+            else "picked up the event already created here and published it",
+            external_id=eid, url=url, data={"ticket_class_id": tid})
 
     def update(self, event: dict, channel: dict, quantity: int | None,
                changed: list[str]) -> Result:

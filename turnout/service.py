@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from . import capacity as cap
 from . import db
-from .adapters import CODES, Result, can, capability, get
+from .adapters import CODES, MANUAL, NAMES, Result, can, capability, get
 from .merge import merge_people
 
 # Fields whose change is worth pushing to a platform. Editing a note to self
@@ -134,6 +134,75 @@ def _apply(conn, event: dict, channel: dict, res: Result, default_state: str) ->
            res.message, channel["id"])
 
 
+def _claim(conn, channel: dict) -> bool:
+    """Take the channel before calling the platform, in one statement.
+
+    Two presses arriving together both used to read `idle` and both create a
+    listing — and two events for one meeting is the mistake with no undo,
+    because the posters are already printed. Claiming marks it live *before*
+    the call instead of after, so the second press loses. The worst case is a
+    channel that says it is up when the call died halfway, which the next
+    publish repairs; the alternative was two events nobody can merge.
+    """
+    cur = conn.execute(
+        "UPDATE channel SET state = 'live', updated_at = ? "
+        "WHERE id = ? AND state != 'live'", (db.now(), channel["id"]))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def recheck_listings(conn, event_id: str) -> list[ChannelReport]:
+    """Ask each platform whether the listing Turnout points at is still there.
+
+    Turnout's own state records what happened when it last called. It cannot
+    know that somebody deleted the event on the platform since — and the
+    public page keeps sending people to it, which is the worst way for a
+    group to find out. A listing that has gone has its address cleared, so
+    the link list stops advertising it and Publish makes a fresh one.
+    """
+    event = get_event(conn, event_id)
+    reports = []
+
+    for ch in get_channels(conn, event["id"]):
+        adapter = adapter_for(conn, ch)
+        if not hasattr(adapter, "remote_state") or not ch["external_id"]:
+            continue
+        if needs_access(conn, ch):
+            continue
+        try:
+            state = adapter.remote_state(ch)
+        except Exception:
+            # A platform being unreachable is not evidence that an event was
+            # deleted. Leave everything exactly as it is.
+            continue
+        if state is None or state["state"] == "live":
+            continue
+
+        if state["state"] == "gone":
+            conn.execute(
+                "UPDATE channel SET url = '', external_id = NULL, config = '{}', "
+                "state = 'idle', error = ?, updated_at = ? WHERE id = ?",
+                (f"the listing was deleted on {NAMES.get(ch['kind'], ch['kind'])}",
+                 db.now(), ch["id"]))
+            res = Result.needs_you(
+                f"that listing is gone from {NAMES.get(ch['kind'], ch['kind'])} "
+                "— address cleared so the public page stops pointing at it. "
+                "Publish again to make a new one.")
+        else:
+            conn.execute(
+                "UPDATE channel SET url = '', state = 'failed', error = ?, "
+                "updated_at = ? WHERE id = ?",
+                ("still a draft on the platform", db.now(), ch["id"]))
+            res = Result.failed(
+                "still a draft there, so nobody can open it — address cleared. "
+                "Publish again to finish it off.")
+        db.log(conn, event["id"], CODES.get(ch["kind"], "··"), res.message, ch["id"])
+        reports.append(ChannelReport(ch["id"], ch["kind"], ch["label"],
+                                     CODES.get(ch["kind"], "··"), res))
+    conn.commit()
+    return reports
+
+
 def publish(conn, event_id: str, channel_ids: list[str] | None = None
             ) -> list[ChannelReport]:
     event = get_event(conn, event_id)
@@ -141,9 +210,17 @@ def publish(conn, event_id: str, channel_ids: list[str] | None = None
                 if channel_ids is None or c["id"] in channel_ids]
     c = cap.read(conn, event["id"])
     reports = []
+    already = []
 
     for ch in channels:
-        if ch["state"] == "live":
+        if ch["state"] == "live" or not _claim(conn, ch):
+            # Up already, or another press got here first. Publishing again
+            # would make a second listing, which is the one mistake there is
+            # no undo for — two pages, and the posters pointing at whichever.
+            already.append(ch["label"])
+            reports.append(ChannelReport(ch["id"], ch["kind"], ch["label"],
+                                         CODES.get(ch["kind"], "··"),
+                                         Result.done("already up, left alone")))
             continue
         if needs_access(conn, ch):
             res = Result.needs_you(
@@ -160,6 +237,10 @@ def publish(conn, event_id: str, channel_ids: list[str] | None = None
         reports.append(ChannelReport(ch["id"], ch["kind"], ch["label"],
                                      CODES.get(ch["kind"], "··"), res))
 
+    if already:
+        db.log(conn, event["id"], "··",
+               f"already up, left alone: {', '.join(already)} — "
+               "edits go out with Push everywhere")
     conn.execute("UPDATE event SET published = ?, status = 'live', updated_at = ? "
                  "WHERE id = ?", (snapshot(event), db.now(), event["id"]))
     conn.commit()
@@ -348,3 +429,92 @@ def capability_rows(kind: str) -> list[tuple[str, str, str]]:
               ("emails", "Give email addresses")]
     words = {"yes": "yes", "partial": "partly", "no": "no", "manual": "by hand"}
     return [(lbl, capability(kind, k), words[capability(kind, k)]) for k, lbl in labels]
+
+
+def add_channel(conn, event_id: str, kind: str, label: str = "",
+                url: str = "", allocation: int | None = None,
+                policy: str = "waitlist") -> str:
+    """Put a channel on an event, from wherever it was asked for.
+
+    Shared by the create form on the home page and the add-a-platform form on
+    the event page, so the one rule that matters — a typed-in address is
+    already live, because there is nothing left to do to it — can't drift
+    between them.
+    """
+    from .adapters import NAMES
+
+    state = "live" if (url.strip() and kind in ("manual", "facebook")) else "idle"
+    cid = db.new_id()
+    conn.execute(
+        """INSERT INTO channel (id, event_id, kind, label, url, allocation,
+           policy, state, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (cid, event_id, kind, label or NAMES.get(kind, kind), url.strip(),
+         allocation, policy, state, db.now(), db.now()))
+    db.log(conn, event_id, CODES.get(kind, "··"),
+           f"channel added ({NAMES.get(kind, kind)})")
+    return cid
+
+
+def publishing_options(conn) -> list[dict]:
+    """What each platform can do for this installation, right now.
+
+    The capability matrix says what a platform is capable of; this says what
+    is actually available today given what has been built and what access has
+    been saved. The home screen shows it so nobody discovers the limit
+    halfway through composing an event.
+    """
+    from .adapters import IMPLEMENTED, KINDS, NAMES, NEEDS_ACCESS, NOTES
+
+    saved = {c["kind"] for c in credentials(conn)}
+    in_use = {r["kind"]: r["n"] for r in conn.execute(
+        "SELECT kind, COUNT(*) AS n FROM channel GROUP BY kind")}
+
+    out = []
+    for kind in KINDS:
+        caps_are_promises = False
+        if kind not in IMPLEMENTED:
+            rank, state, tag = 3, "idle", "not built yet"
+            summary = ("Declared so the interface stays honest about what is "
+                       "coming. Adding it today gets you a link you manage "
+                       "yourself.")
+            caps_are_promises = True
+        elif kind not in NEEDS_ACCESS:
+            rank, state = 0, "manual"
+            tag = "assisted" if capability(kind, "create") == MANUAL and kind != "manual" \
+                else "always available"
+            summary = ("No account and no token. You put the event up, paste "
+                       "the address in, and it goes on the public page.")
+        elif capability(kind, "create") == MANUAL:
+            # Access buys the sign-ups back, not the publishing: Action
+            # Network's API cannot put up an event anybody can sign, so
+            # promising a listing here would be the one lie this screen exists
+            # to prevent.
+            if kind in saved:
+                rank, state, tag = 0, "live", "access saved"
+                summary = ("You make the event there and paste the address in. "
+                           "Turnout reads the sign-ups back, with email "
+                           "addresses, and pushes edits.")
+            else:
+                rank, state, tag = 1, "drift", "needs access"
+                summary = ("You make the event there and paste the address in. "
+                           "Add a key and Turnout also reads the sign-ups back.")
+        elif kind in saved:
+            rank, state, tag = 0, "live", "access saved"
+            summary = ("Turnout creates the listing itself, pushes edits "
+                       "through, and reads sign-ups back.")
+        else:
+            rank, state, tag = 1, "drift", "needs access"
+            summary = ("Add access and Turnout takes it over. Until then it "
+                       "behaves like a link you manage yourself.")
+        out.append({
+            "kind": kind, "name": NAMES[kind], "code": CODES.get(kind, "··"),
+            "rank": rank, "state": state, "tag": tag, "summary": summary,
+            "note": NOTES.get(kind, ""),
+            "can_add_access": (kind in IMPLEMENTED and kind in NEEDS_ACCESS
+                               and kind not in saved),
+            "channels": in_use.get(kind, 0),
+            "caps_are_promises": caps_are_promises,
+            "rows": capability_rows(kind),
+        })
+    out.sort(key=lambda o: (o["rank"], KINDS.index(o["kind"])))
+    return out
