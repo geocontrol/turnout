@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import sys
 import zipfile
@@ -120,6 +121,50 @@ def test_restore_refuses_an_archive_with_a_corrupt_manifest(tmp_path):
 
     with pytest.raises(ValueError):
         backup.read_manifest(junk)
+
+
+def test_a_backup_from_a_newer_turnout_is_refused(tmp_path):
+    """FORMAT is written into every manifest and was never read back.
+
+    A format-2 archive would have restored silently into a build that reads
+    format 1, and whatever it could not understand would simply be gone.
+    """
+    p, conn = _disk_db(tmp_path)
+    archive = backup.write(conn, tmp_path / "backups")
+    with zipfile.ZipFile(archive) as z:
+        manifest, dbbytes = json.loads(z.read(backup.MANIFEST)), z.read(backup.DB_ENTRY)
+    manifest["format"] = backup.FORMAT + 1
+    future = tmp_path / "from-the-future.zip"
+    with zipfile.ZipFile(future, "w") as z:
+        z.writestr(backup.MANIFEST, json.dumps(manifest))
+        z.writestr(backup.DB_ENTRY, dbbytes)
+
+    with pytest.raises(backup.Unsupported):
+        backup.restore(future, p, conn, tmp_path / "backups")
+    # Still a ValueError, so callers that only know about one failure are fine.
+    assert issubclass(backup.Unsupported, ValueError)
+
+
+def test_a_database_member_that_is_not_sqlite_is_refused(tmp_path):
+    """The manifest can be perfect and the payload still be anything at all.
+
+    Restoring it leaves db.connect() raising on every request afterwards,
+    which is a much worse outcome than refusing the file.
+    """
+    junk = tmp_path / "wrong-inside.zip"
+    with zipfile.ZipFile(junk, "w") as z:
+        z.writestr(backup.MANIFEST, json.dumps({"format": backup.FORMAT}))
+        z.writestr(backup.DB_ENTRY, b"PK\x03\x04 or a jpeg or anything else")
+
+    with pytest.raises(ValueError):
+        backup.read_manifest(junk)
+
+
+def test_a_real_backup_still_reads_back(tmp_path):
+    """The three new checks must not have closed the door on ourselves."""
+    _, conn = _disk_db(tmp_path)
+    archive = backup.write(conn, tmp_path / "backups")
+    assert backup.read_manifest(archive)["format"] == backup.FORMAT
 
 
 def test_restore_leaves_the_database_untouched_if_the_copy_fails(tmp_path, monkeypatch):

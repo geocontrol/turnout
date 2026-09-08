@@ -13,6 +13,7 @@ afterwards that they posted a live Eventbrite key through it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -23,6 +24,27 @@ from pathlib import Path
 FORMAT = 1
 MANIFEST = "turnout-backup.json"
 DB_ENTRY = "turnout.db"
+
+#: Every SQLite file begins with this. Checking it is the difference between
+#: refusing a foreign file and restoring it, then raising on every request
+#: afterwards because db.connect() cannot open what was put there.
+SQLITE_MAGIC = b"SQLite format 3\x00"
+
+log = logging.getLogger("turnout.backup")
+
+
+class Unsupported(ValueError):
+    """A real Turnout backup, written by a version that knows more than this one.
+
+    A ValueError, so every existing caller that treats "cannot read this
+    archive" as one thing keeps working. Separate, so the organiser can be
+    told the difference between a file that is not a backup and one that is
+    simply from a newer Turnout — those need different next steps.
+    """
+
+
+class _NotOurs(Exception):
+    """Internal: a failed check inside read_manifest, converted on the way out."""
 
 
 def _snapshot(conn: sqlite3.Connection, dest: Path, include_credentials: bool) -> None:
@@ -91,15 +113,43 @@ def write(conn: sqlite3.Connection, dest_dir: Path, include_credentials: bool = 
 
 
 def read_manifest(archive: Path) -> dict:
-    """Return the archive's manifest, or raise if it is not a Turnout backup."""
+    """Return the archive's manifest, or raise if it is not a Turnout backup.
+
+    This is the whole gate between a file somebody was handed and an
+    overwrite of the live database, so it checks the three things that
+    matter: both members are present, the manifest is a format this build
+    understands, and the database member really is a SQLite file.
+
+    Args:
+        archive: The .zip to inspect.
+
+    Returns:
+        The parsed manifest.
+
+    Raises:
+        Unsupported: A Turnout backup written in a format this build does
+            not know.
+        ValueError: Anything else — not a zip, wrong members, unreadable
+            manifest, or a database member that is not SQLite.
+    """
     try:
         with zipfile.ZipFile(archive) as z:
             names = z.namelist()
             if MANIFEST not in names or DB_ENTRY not in names:
-                raise ValueError("not a Turnout backup")
-            return json.loads(z.read(MANIFEST))
-    except (zipfile.BadZipFile, json.JSONDecodeError) as exc:
+                raise _NotOurs
+            manifest = json.loads(z.read(MANIFEST))
+            with z.open(DB_ENTRY) as member:
+                header = member.read(len(SQLITE_MAGIC))
+    except Exception as exc:  # every failure here means the same thing
         raise ValueError("not a Turnout backup") from exc
+
+    if not isinstance(manifest, dict) or header != SQLITE_MAGIC:
+        raise ValueError("not a Turnout backup")
+    if manifest.get("format") != FORMAT:
+        raise Unsupported(
+            f"backup format {manifest.get('format')!r}; this Turnout reads format {FORMAT}"
+        )
+    return manifest
 
 
 def restore(archive: Path, db_file: Path, conn: sqlite3.Connection, backups: Path) -> Path:
@@ -109,6 +159,10 @@ def restore(archive: Path, db_file: Path, conn: sqlite3.Connection, backups: Pat
     access, and returns its path — restoring the wrong archive should be
     recoverable, not final. Closes conn: the caller must reopen.
 
+    Every step that can fail happens before the swap, so if this raises, the
+    live database is byte-for-byte what it was. The caller tells the
+    organiser exactly that, and it has to be true.
+
     Args:
         archive: The backup archive to restore from.
         db_file: Path to the live database file to overwrite.
@@ -117,6 +171,10 @@ def restore(archive: Path, db_file: Path, conn: sqlite3.Connection, backups: Pat
 
     Returns:
         Path to the safety backup taken before the restore.
+
+    Raises:
+        Unsupported: The archive is a backup from a newer Turnout.
+        ValueError: The archive is not a Turnout backup at all.
     """
     read_manifest(archive)
     safety = write(conn, backups, include_credentials=True)
@@ -133,6 +191,15 @@ def restore(archive: Path, db_file: Path, conn: sqlite3.Connection, backups: Pat
         tmp.unlink(missing_ok=True)
     # The old WAL and shared-memory sidecars describe a database that no
     # longer exists. Leaving them would corrupt the one just restored.
+    #
+    # Past the swap, though, raising is off the table: the new database is
+    # already live, and the caller's failure message says nothing changed.
+    # A stale sidecar is worth shouting about in the log, not worth telling
+    # a volunteer a thing that is not so.
     for suffix in ("-wal", "-shm"):
-        db_file.with_name(db_file.name + suffix).unlink(missing_ok=True)
+        side = db_file.with_name(db_file.name + suffix)
+        try:
+            side.unlink(missing_ok=True)
+        except OSError:
+            log.exception("restored the database but could not remove %s", side)
     return safety
