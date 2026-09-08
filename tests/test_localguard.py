@@ -32,6 +32,14 @@ def client(token=None):
     def enter():
         return {"entered": True}
 
+    @app.get("/app/enterprise")
+    def enterprise():
+        return {"enterprise": True}
+
+    @app.get("/healthz")
+    def healthz():
+        return {"healthy": True}
+
     app.add_middleware(LocalGuard, port=PORT, token=token)
     return TestClient(app, base_url=ORIGIN)
 
@@ -85,3 +93,16 @@ def test_the_public_page_never_needs_the_token():
 def test_the_entry_route_never_needs_the_token():
     """It is how you get the cookie in the first place."""
     assert client(token="s3cret").get("/app/enter").status_code == 200
+
+
+def test_a_public_path_still_checks_the_host():
+    """Public paths bypass the token check but not the Host check."""
+    r = client().get(
+        "/l/some-event", headers={"host": f"evil.example.com:{PORT}"}
+    )
+    assert r.status_code == 400
+
+
+def test_app_enterprise_is_not_exempt_from_token_check():
+    """Only /app/enter bypasses the token; /app/enterprise does not."""
+    assert client(token="s3cret").get("/app/enterprise").status_code == 403

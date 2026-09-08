@@ -14,6 +14,7 @@ site.
 
 from __future__ import annotations
 
+import secrets
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -22,9 +23,11 @@ from starlette.responses import PlainTextResponse, Response
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
-#: Routes that must work without the token. The public link list is printed
-#: on leaflets; /app/enter is how a browser is given the token to begin with.
-PUBLIC_PREFIXES = ("/l/", "/healthz", "/app/enter")
+#: Exact paths that must work without the token.
+PUBLIC_PATHS = ("/healthz", "/app/enter")
+
+#: Genuine prefixes: the public link list is /l/{slug} and /l/{slug}/qr.svg.
+PUBLIC_PREFIXES = ("/l/",)
 
 
 def allowed_hosts(port: int) -> set[str]:
@@ -45,10 +48,11 @@ class LocalGuard(BaseHTTPMiddleware):
             return PlainTextResponse("bad host", status_code=400)
 
         path = request.url.path
-        public = path.startswith(PUBLIC_PREFIXES)
+        public = path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
 
         if self.token and not public:
-            if request.cookies.get("turnout_local") != self.token:
+            supplied = request.cookies.get("turnout_local") or ""
+            if not secrets.compare_digest(supplied, self.token):
                 return PlainTextResponse(
                     "Open Turnout from its icon.", status_code=403)
 
