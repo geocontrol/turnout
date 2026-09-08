@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import secrets
 import threading
@@ -45,6 +46,8 @@ from .merge import suggest_merges, to_csv_rows
 #: Desktop mode: launched from an icon rather than a terminal or a container.
 DESKTOP = os.environ.get("TURNOUT_DESKTOP") == "1"
 
+log = logging.getLogger("turnout.main")
+
 templates = Jinja2Templates(directory=str(paths.resource_dir() / "templates"))
 templates.env.filters["from_json"] = lambda v: json.loads(v or "{}")
 templates.env.globals.update(
@@ -59,6 +62,12 @@ templates.env.globals.update(
     NEEDS_ACCESS=NEEDS_ACCESS,
     ACCESS_FIELDS=ACCESS_FIELDS,
     desktop=DESKTOP,
+    version=__version__,
+    # base.html's update banner. A global rather than per-route context
+    # because it belongs on every organiser page; a cached read, because a
+    # page render must never wait on the network. turnout/desktop.py does
+    # the fetching, once per launch, on its own thread.
+    update_available=update.cached,
 )
 
 app = FastAPI(title="Turnout", docs_url=None, redoc_url=None)
@@ -94,14 +103,32 @@ def get_conn():
 
 
 def require_organiser(request: Request):
-    """Organiser routes only. The public link list never calls this."""
-    if not TOKEN:
+    """Organiser routes only. The public link list never calls this.
+
+    Two deployments, two secrets. A hosted Turnout sets TURNOUT_TOKEN and
+    that is the check. A desktop Turnout has no TURNOUT_TOKEN, and used to
+    return True to everything — which left /app/restore, a route that
+    replaces the whole database from an upload, standing on LocalGuard alone.
+    LocalGuard is mounted by the launcher, in one line, in another module: a
+    single deletion there would have opened every organiser route with no
+    test noticing. So the route layer checks the same per-install token
+    itself, and the two defences are genuinely two.
+
+    /app/enter is not routed through here — it is the door the cookie comes
+    from, and it does its own comparison against the same token.
+    """
+    if TOKEN:
+        supplied = request.headers.get("authorization", "").removeprefix(
+            "Bearer "
+        ).strip() or request.cookies.get("turnout_token", "")
+        if supplied != TOKEN:
+            raise HTTPException(401, "not signed in")
         return True
-    supplied = request.headers.get("authorization", "").removeprefix(
-        "Bearer "
-    ).strip() or request.cookies.get("turnout_token", "")
-    if supplied != TOKEN:
-        raise HTTPException(401, "not signed in")
+    if DESKTOP:
+        expected = local_token() or ""
+        supplied = request.cookies.get("turnout_local", "")
+        if not expected or not secrets.compare_digest(supplied, expected):
+            raise HTTPException(403, "Open Turnout from its icon.")
     return True
 
 
@@ -645,7 +672,6 @@ if DESKTOP:
                     :10
                 ],
                 "update_check": update.enabled(),
-                "available": update.check(),
                 "said": said,
             },
         )
@@ -666,11 +692,27 @@ if DESKTOP:
         staged.write_bytes(await file.read())
         try:
             safety = backup.restore(staged, Path(paths.db_path()), get_conn(), paths.backup_dir())
+        except backup.Unsupported:
+            return RedirectResponse(
+                "/app?said=That+backup+was+written+by+a+newer+Turnout+than+this+one",
+                status_code=303,
+            )
         except ValueError:
             return RedirectResponse("/app?said=That+file+is+not+a+Turnout+backup", status_code=303)
+        except Exception:  # a full disk must not brick the app
+            # restore() closes the connection before it copies anything, so
+            # anything escaping it leaves _conn pointing at a closed handle.
+            # Letting that propagate turned one failed restore into a 500 on
+            # every organiser page afterwards, which from where the volunteer
+            # sits looks exactly like having destroyed the database.
+            log.exception("restore failed")
+            return RedirectResponse(
+                "/app?said=The+restore+did+not+finish.+Your+data+has+not+been+changed.",
+                status_code=303,
+            )
         finally:
             staged.unlink(missing_ok=True)
-        _conn = None  # reopened on the next request, against the new file
+            _conn = None  # cheap to reopen; never leave a closed handle here
         return RedirectResponse(
             f"/app?said=Restored.+Your+previous+data+is+in+{safety.name}", status_code=303
         )
@@ -700,7 +742,6 @@ if DESKTOP:
                 "data_dir": str(paths.data_dir()),
                 "backups": [],
                 "update_check": update.enabled(),
-                "available": None,
                 "said": "",
             },
         )

@@ -12,12 +12,6 @@
 
   {% if said %}<div class="banner info"><div class="grow">{{ said }}</div></div>{% endif %}
 
-  {% if available %}
-  <div class="banner warn"><div class="grow">
-    <b>Version {{ available.version }} is available.</b> {{ available.notes }}
-  </div><a class="btn sm" href="{{ available.url }}">Get it</a></div>
-  {% endif %}
-
   <h1>This computer</h1>
 
   <div class="card">
@@ -68,7 +62,8 @@
         <input type="checkbox" name="on" value="1" style="width:auto"
                {% if update_check %}checked{% endif %}> Check for new versions
       </span></label>
-      <p class="hint">Turnout asks GitHub whether a newer version exists. That
+      <p class="hint">When Turnout starts, and at most once a day, it asks
+        GitHub whether a newer version exists. That
         request tells GitHub your IP address and which version you are running,
         and nothing else — no account, no identifier, no record of your events.
         Untick it and Turnout never contacts anyone on its own.</p>
