@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+from typing import Any, Callable
 
 import httpx
 
@@ -25,15 +26,22 @@ from . import __version__, paths
 PREFERRED_PORT = 8100
 log = logging.getLogger("turnout.desktop")
 
+_logging_configured = False
+
 
 def setup_logging() -> None:
     """Log to a rotating file. There is no terminal to print to."""
+    global _logging_configured
+    if _logging_configured:
+        return          # a second call would duplicate every line
+    _logging_configured = True
+
+    root = logging.getLogger()
     paths.ensure_data_dir()
     handler = logging.handlers.RotatingFileHandler(
         paths.log_path(), maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.addHandler(handler)
 
@@ -142,7 +150,31 @@ def self_test() -> int:
     return 0 if all(ok for _, ok in checks) else 1
 
 
-def _run_tray(open_url: str, stop) -> None:
+def _make_stop(server: Any, tray: list) -> Callable[[], None]:
+    """Build the one callback that actually ends the process.
+
+    `server` is a uvicorn.Server (typed loosely so this module never needs
+    to import uvicorn just to be imported itself — main() imports it lazily
+    so --self-test users do not need it installed).
+
+    /app/quit (via the watcher thread in main()) and the tray's own Quit
+    menu item both call this. Stopping the uvicorn server is not enough on
+    its own: pystray.Icon.run() blocks the main thread until icon.stop() is
+    called, so without reaching into `tray` a successful tray leaves the
+    process running forever with a dead server behind it. `tray` starts
+    empty and gains the running icon once `_run_tray` hands it back (via
+    the `started` callback below) — stop() must stay a no-op on that icon
+    until then, since /app/quit can race the tray still starting up.
+    """
+    def stop() -> None:
+        server.should_exit = True
+        for icon in tray:
+            icon.stop()          # unblocks _run_tray on the main thread
+    return stop
+
+
+def _run_tray(open_url: str, stop: Callable[[], None],
+              started: Callable[[object], None]) -> None:
     """Best-effort tray icon. Never load-bearing: Quit is also in the web UI."""
     try:
         import pystray
@@ -163,6 +195,7 @@ def _run_tray(open_url: str, stop) -> None:
                                      paths.log_path().as_uri())),
                 pystray.MenuItem("Quit Turnout", lambda *_: stop()),
             ))
+        started(icon)             # hand it back before we block
         icon.run()
     except Exception as exc:           # noqa: BLE001
         log.info("tray icon could not start, carrying on without it: %s", exc)
@@ -213,8 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     if os.environ.get("TURNOUT_NO_BROWSER") != "1":
         webbrowser.open(open_url)
 
-    def stop() -> None:
-        server.should_exit = True
+    tray: list = []             # gains the running icon, if any, once it starts
+    stop = _make_stop(server, tray)
 
     # POST /app/quit sets this flag; the tray calls stop() directly.
     threading.Thread(target=lambda: (web.QUIT.wait(), stop()),
@@ -223,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     if os.environ.get("TURNOUT_NO_TRAY") == "1":
         web.QUIT.wait()
     else:
-        _run_tray(open_url, stop)
+        _run_tray(open_url, stop, tray.append)
         web.QUIT.set()          # tray closed: bring the server down with it
 
     server.should_exit = True

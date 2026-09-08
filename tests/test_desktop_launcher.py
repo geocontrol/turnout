@@ -132,3 +132,55 @@ def test_the_launch_token_never_reaches_the_log_file(tmp_path, monkeypatch):
         # desktop.main() sets this via plain os.environ, not monkeypatch, so
         # it survives monkeypatch.undo() unless removed by hand here.
         os.environ.pop("TURNOUT_DESKTOP", None)
+
+
+# --------------------------------------------------------------- quit wiring
+#
+# pystray.Icon.run() blocks the main thread until icon.stop() is called.
+# There is no way to drive a real tray icon headlessly in a test, but the
+# wiring that decides whether Quit actually reaches the icon is ordinary
+# Python and does not need one.
+
+
+def test_stop_reaches_both_the_server_flag_and_a_running_tray_icon():
+    """Without this, a successful tray leaves the process running forever
+    with a dead server behind it: stopping uvicorn is not the same as
+    unblocking icon.run()."""
+
+    class FakeServer:
+        should_exit = False
+
+    class FakeIcon:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    server = FakeServer()
+    tray: list = []
+    stop = desktop._make_stop(server, tray)
+
+    icon = FakeIcon()
+    tray.append(icon)          # what `started` does once _run_tray comes up
+
+    stop()
+
+    assert server.should_exit is True
+    assert icon.stopped is True
+
+
+def test_stop_is_safe_when_the_tray_never_started():
+    """/app/quit can race the tray still starting up, or run on a platform
+    where the tray failed to start at all — either way there is no icon to
+    reach yet, and stop() must still bring the server down."""
+
+    class FakeServer:
+        should_exit = False
+
+    server = FakeServer()
+    stop = desktop._make_stop(server, [])
+
+    stop()
+
+    assert server.should_exit is True
