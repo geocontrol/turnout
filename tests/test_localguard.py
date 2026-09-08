@@ -97,9 +97,7 @@ def test_the_entry_route_never_needs_the_token():
 
 def test_a_public_path_still_checks_the_host():
     """Public paths bypass the token check but not the Host check."""
-    r = client().get(
-        "/l/some-event", headers={"host": f"evil.example.com:{PORT}"}
-    )
+    r = client().get("/l/some-event", headers={"host": f"evil.example.com:{PORT}"})
     assert r.status_code == 400
 
 

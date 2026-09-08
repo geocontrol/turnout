@@ -29,11 +29,14 @@ def test_a_newer_release_is_reported(monkeypatch, tmp_path):
     monkeypatch.setattr("turnout.update.CURRENT", "0.1.0")
 
     def handler(request):
-        return httpx.Response(200, json={
-            "version": "0.2.0",
-            "url": "https://github.com/geocontrol/turnout/releases/latest",
-            "notes": "Ticket Tailor fixes",
-        })
+        return httpx.Response(
+            200,
+            json={
+                "version": "0.2.0",
+                "url": "https://github.com/geocontrol/turnout/releases/latest",
+                "notes": "Ticket Tailor fixes",
+            },
+        )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     found = update.check(client)

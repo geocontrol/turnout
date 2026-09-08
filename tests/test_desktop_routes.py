@@ -23,13 +23,15 @@ def desktop(tmp_path, monkeypatch):
     # network-free, so disable it before the app (and its TestClient) exist.
     update.set_enabled(False)
     from turnout import main
+
     importlib.reload(main)
     conn = db.connect(str(tmp_path / "turnout.db"))
     conn.execute(
         """INSERT INTO event (id, slug, title, starts_at, oversell_pct,
            capacity_mode, created_at, updated_at)
            VALUES ('E','e','Public meeting','2026-09-17T19:00',0,'pool',?,?)""",
-        (db.now(), db.now()))
+        (db.now(), db.now()),
+    )
     conn.commit()
     monkeypatch.setattr(main, "_conn", conn)
     yield main, TestClient(main.app)
@@ -88,7 +90,9 @@ def test_backing_up_leaves_the_keys_out_unless_asked(desktop, tmp_path):
     main, client = desktop
     main._conn.execute(
         """INSERT INTO credential (id, kind, label, secret, created_at)
-           VALUES ('K','eventbrite','Union','live-secret-token',?)""", (db.now(),))
+           VALUES ('K','eventbrite','Union','live-secret-token',?)""",
+        (db.now(),),
+    )
     main._conn.commit()
 
     client.post("/app/backup", data={}, follow_redirects=False)

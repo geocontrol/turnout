@@ -33,15 +33,15 @@ def setup_logging() -> None:
     """Log to a rotating file. There is no terminal to print to."""
     global _logging_configured
     if _logging_configured:
-        return          # a second call would duplicate every line
+        return  # a second call would duplicate every line
     _logging_configured = True
 
     root = logging.getLogger()
     paths.ensure_data_dir()
     handler = logging.handlers.RotatingFileHandler(
-        paths.log_path(), maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        paths.log_path(), maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.setLevel(logging.INFO)
     root.addHandler(handler)
 
@@ -64,7 +64,7 @@ def is_turnout(port: int) -> bool:
     try:
         body = httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=1.0).json()
         return body.get("app") == "turnout"
-    except Exception:                  # noqa: BLE001 — anything means "not us"
+    except Exception:  # noqa: BLE001 — anything means "not us"
         return False
 
 
@@ -111,7 +111,7 @@ def _https_reachable() -> bool:
     try:
         httpx.get("https://api.github.com/", timeout=10.0)
         return True
-    except Exception:                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -128,20 +128,20 @@ def self_test() -> int:
     except OSError:
         checks.append(("data directory is writable", False))
 
-    checks.append(("templates were bundled",
-                   (paths.resource_dir() / "templates" / "base.html").exists()))
+    checks.append(
+        ("templates were bundled", (paths.resource_dir() / "templates" / "base.html").exists())
+    )
 
     try:
         import qrcode
         import qrcode.image.svg
-        qrcode.make("https://example.org",
-                    image_factory=qrcode.image.svg.SvgPathImage, border=2)
+
+        qrcode.make("https://example.org", image_factory=qrcode.image.svg.SvgPathImage, border=2)
         checks.append(("QR codes can be drawn", True))
-    except Exception:                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         checks.append(("QR codes can be drawn", False))
 
-    checks.append(("HTTPS works (needed by every platform adapter)",
-                   _https_reachable()))
+    checks.append(("HTTPS works (needed by every platform adapter)", _https_reachable()))
 
     print(f"Turnout {__version__}")
     print(f"data directory: {paths.data_dir()}")
@@ -166,38 +166,42 @@ def _make_stop(server: Any, tray: list) -> Callable[[], None]:
     the `started` callback below) — stop() must stay a no-op on that icon
     until then, since /app/quit can race the tray still starting up.
     """
+
     def stop() -> None:
         server.should_exit = True
         for icon in tray:
-            icon.stop()          # unblocks _run_tray on the main thread
+            icon.stop()  # unblocks _run_tray on the main thread
+
     return stop
 
 
-def _run_tray(open_url: str, stop: Callable[[], None],
-              started: Callable[[object], None]) -> None:
+def _run_tray(open_url: str, stop: Callable[[], None], started: Callable[[object], None]) -> None:
     """Best-effort tray icon. Never load-bearing: Quit is also in the web UI."""
     try:
         import pystray
         from PIL import Image
-    except Exception as exc:           # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         log.info("no tray support available: %s", exc)
         return
     try:
         image = Image.open(paths.resource_dir() / "resources" / "icon.png")
         icon = pystray.Icon(
-            "turnout", image, "Turnout",
+            "turnout",
+            image,
+            "Turnout",
             menu=pystray.Menu(
-                pystray.MenuItem("Open Turnout",
-                                 lambda *_: webbrowser.open(open_url),
-                                 default=True),
-                pystray.MenuItem("Reveal log",
-                                 lambda *_: webbrowser.open(
-                                     paths.log_path().as_uri())),
+                pystray.MenuItem(
+                    "Open Turnout", lambda *_: webbrowser.open(open_url), default=True
+                ),
+                pystray.MenuItem(
+                    "Reveal log", lambda *_: webbrowser.open(paths.log_path().as_uri())
+                ),
                 pystray.MenuItem("Quit Turnout", lambda *_: stop()),
-            ))
-        started(icon)             # hand it back before we block
+            ),
+        )
+        started(icon)  # hand it back before we block
         icon.run()
-    except Exception as exc:           # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         log.info("tray icon could not start, carrying on without it: %s", exc)
 
 
@@ -228,11 +232,11 @@ def main(argv: list[str] | None = None) -> int:
     web.app.add_middleware(LocalGuard, port=port, token=token)
     _write_port(port)
 
-    config = uvicorn.Config(web.app, host="127.0.0.1", port=port,
-                            log_level="info", access_log=False)
+    config = uvicorn.Config(
+        web.app, host="127.0.0.1", port=port, log_level="info", access_log=False
+    )
     server = uvicorn.Server(config)
-    threading.Thread(target=server.run, name="turnout-server",
-                     daemon=True).start()
+    threading.Thread(target=server.run, name="turnout-server", daemon=True).start()
 
     for _ in range(100):
         if is_turnout(port):
@@ -246,18 +250,19 @@ def main(argv: list[str] | None = None) -> int:
     if os.environ.get("TURNOUT_NO_BROWSER") != "1":
         webbrowser.open(open_url)
 
-    tray: list = []             # gains the running icon, if any, once it starts
+    tray: list = []  # gains the running icon, if any, once it starts
     stop = _make_stop(server, tray)
 
     # POST /app/quit sets this flag; the tray calls stop() directly.
-    threading.Thread(target=lambda: (web.QUIT.wait(), stop()),
-                     name="turnout-quit-watch", daemon=True).start()
+    threading.Thread(
+        target=lambda: (web.QUIT.wait(), stop()), name="turnout-quit-watch", daemon=True
+    ).start()
 
     if os.environ.get("TURNOUT_NO_TRAY") == "1":
         web.QUIT.wait()
     else:
         _run_tray(open_url, stop, tray.append)
-        web.QUIT.set()          # tray closed: bring the server down with it
+        web.QUIT.set()  # tray closed: bring the server down with it
 
     server.should_exit = True
     time.sleep(0.5)

@@ -18,11 +18,13 @@ def _disk_db(tmp_path):
         """INSERT INTO event (id, slug, title, starts_at, oversell_pct,
            capacity_mode, created_at, updated_at)
            VALUES ('E','e','Public meeting','2026-09-17T19:00',0,'pool',?,?)""",
-        (db.now(), db.now()))
+        (db.now(), db.now()),
+    )
     c.execute(
         """INSERT INTO credential (id, kind, label, secret, created_at)
            VALUES ('K','eventbrite','Union account','live-secret-token',?)""",
-        (db.now(),))
+        (db.now(),),
+    )
     c.commit()
     return p, c
 
@@ -64,7 +66,8 @@ def test_a_backup_of_a_live_database_is_complete(tmp_path):
         """INSERT INTO event (id, slug, title, starts_at, oversell_pct,
            capacity_mode, created_at, updated_at)
            VALUES ('F','f','Second meeting','2026-09-18T19:00',0,'pool',?,?)""",
-        (db.now(), db.now()))
+        (db.now(), db.now()),
+    )
     server.commit()
 
     archive = backup.write(conn, tmp_path / "backups")

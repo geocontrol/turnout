@@ -126,7 +126,7 @@ def test_the_launch_token_never_reaches_the_log_file(tmp_path, monkeypatch):
             from turnout import main as web
 
             web.QUIT.set()
-        except Exception:            # noqa: BLE001 — best-effort cleanup
+        except Exception:  # noqa: BLE001 — best-effort cleanup
             pass
         thread.join(timeout=5)
         # desktop.main() sets this via plain os.environ, not monkeypatch, so
@@ -162,7 +162,7 @@ def test_stop_reaches_both_the_server_flag_and_a_running_tray_icon():
     stop = desktop._make_stop(server, tray)
 
     icon = FakeIcon()
-    tray.append(icon)          # what `started` does once _run_tray comes up
+    tray.append(icon)  # what `started` does once _run_tray comes up
 
     stop()
 

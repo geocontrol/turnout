@@ -49,6 +49,7 @@ def set_enabled(on: bool) -> None:
 
 def newer(candidate: str, current: str) -> bool:
     """Compare dotted numeric versions. 0.10.0 beats 0.9.0."""
+
     def parts(v: str) -> tuple[int, ...]:
         out = []
         for piece in v.split("."):
@@ -78,15 +79,17 @@ def check(client: httpx.Client | None = None) -> dict | None:
         data = client.get(FEED, follow_redirects=True).json()
         version = str(data.get("version", ""))
         if version and newer(version, CURRENT):
-            return {"version": version,
-                    "url": str(data.get("url", "")),
-                    "notes": str(data.get("notes", ""))}
-    except Exception as exc:           # noqa: BLE001 — deliberately total
+            return {
+                "version": version,
+                "url": str(data.get("url", "")),
+                "notes": str(data.get("notes", "")),
+            }
+    except Exception as exc:  # noqa: BLE001 — deliberately total
         log.info("update check did not complete: %s", exc)
     finally:
         if owned:
             try:
                 client.close()
-            except Exception as exc:   # noqa: BLE001 — deliberately total
+            except Exception as exc:  # noqa: BLE001 — deliberately total
                 log.info("update check: could not close client: %s", exc)
     return None

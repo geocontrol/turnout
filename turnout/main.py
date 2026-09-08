@@ -28,8 +28,18 @@ from fastapi.templating import Jinja2Templates
 from . import __version__, backup, paths, update
 from . import capacity as cap
 from . import db, service
-from .adapters import (ACCESS_FIELDS, CODES, IMPLEMENTED, KINDS, NAMES,
-                       NEEDS_ACCESS, NOTES, can, capability, get)
+from .adapters import (
+    ACCESS_FIELDS,
+    CODES,
+    IMPLEMENTED,
+    KINDS,
+    NAMES,
+    NEEDS_ACCESS,
+    NOTES,
+    can,
+    capability,
+    get,
+)
 from .merge import suggest_merges, to_csv_rows
 
 #: Desktop mode: launched from an icon rather than a terminal or a container.
@@ -38,10 +48,16 @@ DESKTOP = os.environ.get("TURNOUT_DESKTOP") == "1"
 templates = Jinja2Templates(directory=str(paths.resource_dir() / "templates"))
 templates.env.filters["from_json"] = lambda v: json.loads(v or "{}")
 templates.env.globals.update(
-    NAMES=NAMES, NOTES=NOTES, CODES=CODES, KINDS=KINDS,
-    IMPLEMENTED=IMPLEMENTED, can=can, capability=capability,
+    NAMES=NAMES,
+    NOTES=NOTES,
+    CODES=CODES,
+    KINDS=KINDS,
+    IMPLEMENTED=IMPLEMENTED,
+    can=can,
+    capability=capability,
     capability_rows=service.capability_rows,
-    NEEDS_ACCESS=NEEDS_ACCESS, ACCESS_FIELDS=ACCESS_FIELDS,
+    NEEDS_ACCESS=NEEDS_ACCESS,
+    ACCESS_FIELDS=ACCESS_FIELDS,
     desktop=DESKTOP,
 )
 
@@ -81,8 +97,9 @@ def require_organiser(request: Request):
     """Organiser routes only. The public link list never calls this."""
     if not TOKEN:
         return True
-    supplied = (request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-                or request.cookies.get("turnout_token", ""))
+    supplied = request.headers.get("authorization", "").removeprefix(
+        "Bearer "
+    ).strip() or request.cookies.get("turnout_token", "")
     if supplied != TOKEN:
         raise HTTPException(401, "not signed in")
     return True
@@ -97,6 +114,7 @@ def _event_or_404(conn, key: str) -> dict:
 
 # ---------------------------------------------------------------- organiser
 
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, _=Depends(require_organiser)):
     conn = get_conn()
@@ -105,21 +123,33 @@ def index(request: Request, _=Depends(require_organiser)):
     for r in rows:
         c = cap.read(conn, r["id"])
         events.append({"e": dict(r), "cap": c})
-    return templates.TemplateResponse(request, "index.html", {
-        "events": events,
-        "options": service.publishing_options(conn),
-    })
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "events": events,
+            "options": service.publishing_options(conn),
+        },
+    )
 
 
 @app.post("/events")
-async def create_event(request: Request, _=Depends(require_organiser),
-                       title: str = Form(...), strap: str = Form(""),
-                       body: str = Form(""), starts_at: str = Form(...),
-                       ends_at: str = Form(""), venue: str = Form(""),
-                       address: str = Form(""), accessibility: str = Form(""),
-                       contact: str = Form(""), capacity: str = Form(""),
-                       oversell_pct: int = Form(0),
-                       capacity_mode: str = Form("pool")):
+async def create_event(
+    request: Request,
+    _=Depends(require_organiser),
+    title: str = Form(...),
+    strap: str = Form(""),
+    body: str = Form(""),
+    starts_at: str = Form(...),
+    ends_at: str = Form(""),
+    venue: str = Form(""),
+    address: str = Form(""),
+    accessibility: str = Form(""),
+    contact: str = Form(""),
+    capacity: str = Form(""),
+    oversell_pct: int = Form(0),
+    capacity_mode: str = Form("pool"),
+):
     """Everything the home page asked for, in one go.
 
     The whole event and every platform it should appear on arrive together,
@@ -136,10 +166,25 @@ async def create_event(request: Request, _=Depends(require_organiser),
            venue, address, accessibility, contact, capacity, oversell_pct,
            capacity_mode, created_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (eid, slug, title.strip(), strap, body, starts_at, ends_at or None,
-         venue, address, accessibility, contact,
-         int(capacity) if capacity.strip() else None, oversell_pct,
-         capacity_mode, db.now(), db.now()))
+        (
+            eid,
+            slug,
+            title.strip(),
+            strap,
+            body,
+            starts_at,
+            ends_at or None,
+            venue,
+            address,
+            accessibility,
+            contact,
+            int(capacity) if capacity.strip() else None,
+            oversell_pct,
+            capacity_mode,
+            db.now(),
+            db.now(),
+        ),
+    )
     db.log(conn, eid, "··", "event created in Turnout")
 
     # Platforms are ticked on the same form, each with an optional address for
@@ -148,80 +193,131 @@ async def create_event(request: Request, _=Depends(require_organiser),
     for kind in form.getlist("kinds"):
         if kind not in KINDS:
             continue
-        service.add_channel(conn, eid, kind,
-                            url=str(form.get(f"url_{kind}", "")).strip())
+        service.add_channel(conn, eid, kind, url=str(form.get(f"url_{kind}", "")).strip())
     conn.commit()
     return RedirectResponse(f"/events/{eid}", status_code=303)
 
 
 @app.get("/events/{eid}", response_class=HTMLResponse)
-def event_page(eid: str, request: Request, tab: str = "event",
-               since: int | None = None, _=Depends(require_organiser)):
+def event_page(
+    eid: str,
+    request: Request,
+    tab: str = "event",
+    since: int | None = None,
+    _=Depends(require_organiser),
+):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
     people = service.people(conn, ev["id"])
     outcome = []
     if since is not None:
         outcome = conn.execute(
-            "SELECT * FROM log WHERE event_id = ? AND id > ? ORDER BY id",
-            (ev["id"], since)).fetchall()
-    return templates.TemplateResponse(request, "event.html", {
-        "e": ev,
-        "tab": tab,
-        "outcome": outcome,
-        "acted": since is not None,
-        "channels": service.get_channels(conn, ev["id"]),
-        "cap": cap.read(conn, ev["id"]),
-        "drift": service.drift(ev),
-        "people": people,
-        "suggestions": suggest_merges(people),
-        "log": conn.execute(
-            "SELECT * FROM log WHERE event_id = ? ORDER BY id DESC LIMIT 80",
-            (ev["id"],)).fetchall(),
-        "credentials": service.credentials(conn),
-        "needs_access": {c["id"]: service.needs_access(conn, c)
-                         for c in service.get_channels(conn, ev["id"])},
-    })
+            "SELECT * FROM log WHERE event_id = ? AND id > ? ORDER BY id", (ev["id"], since)
+        ).fetchall()
+    return templates.TemplateResponse(
+        request,
+        "event.html",
+        {
+            "e": ev,
+            "tab": tab,
+            "outcome": outcome,
+            "acted": since is not None,
+            "channels": service.get_channels(conn, ev["id"]),
+            "cap": cap.read(conn, ev["id"]),
+            "drift": service.drift(ev),
+            "people": people,
+            "suggestions": suggest_merges(people),
+            "log": conn.execute(
+                "SELECT * FROM log WHERE event_id = ? ORDER BY id DESC LIMIT 80", (ev["id"],)
+            ).fetchall(),
+            "credentials": service.credentials(conn),
+            "needs_access": {
+                c["id"]: service.needs_access(conn, c) for c in service.get_channels(conn, ev["id"])
+            },
+        },
+    )
 
 
 @app.post("/events/{eid}")
-def edit_event(eid: str, request: Request, _=Depends(require_organiser),
-               title: str = Form(...), strap: str = Form(""), body: str = Form(""),
-               starts_at: str = Form(...), ends_at: str = Form(""),
-               venue: str = Form(""), address: str = Form(""),
-               accessibility: str = Form(""), contact: str = Form(""),
-               capacity: str = Form(""), oversell_pct: int = Form(0),
-               capacity_mode: str = Form("pool")):
+def edit_event(
+    eid: str,
+    request: Request,
+    _=Depends(require_organiser),
+    title: str = Form(...),
+    strap: str = Form(""),
+    body: str = Form(""),
+    starts_at: str = Form(...),
+    ends_at: str = Form(""),
+    venue: str = Form(""),
+    address: str = Form(""),
+    accessibility: str = Form(""),
+    contact: str = Form(""),
+    capacity: str = Form(""),
+    oversell_pct: int = Form(0),
+    capacity_mode: str = Form("pool"),
+):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
     conn.execute(
         """UPDATE event SET title=?, strap=?, body=?, starts_at=?, ends_at=?,
            venue=?, address=?, accessibility=?, contact=?, capacity=?,
            oversell_pct=?, capacity_mode=?, updated_at=? WHERE id=?""",
-        (title.strip(), strap, body, starts_at, ends_at or None, venue, address,
-         accessibility, contact, int(capacity) if capacity.strip() else None,
-         oversell_pct, capacity_mode, db.now(), ev["id"]))
+        (
+            title.strip(),
+            strap,
+            body,
+            starts_at,
+            ends_at or None,
+            venue,
+            address,
+            accessibility,
+            contact,
+            int(capacity) if capacity.strip() else None,
+            oversell_pct,
+            capacity_mode,
+            db.now(),
+            ev["id"],
+        ),
+    )
     conn.commit()
     return RedirectResponse(f"/events/{ev['id']}", status_code=303)
 
 
 @app.post("/events/{eid}/channels")
-def add_channel(eid: str, kind: str = Form(...), label: str = Form(""),
-                url: str = Form(""), allocation: str = Form(""),
-                policy: str = Form("waitlist"), _=Depends(require_organiser)):
+def add_channel(
+    eid: str,
+    kind: str = Form(...),
+    label: str = Form(""),
+    url: str = Form(""),
+    allocation: str = Form(""),
+    policy: str = Form("waitlist"),
+    _=Depends(require_organiser),
+):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
-    service.add_channel(conn, ev["id"], kind, label=label, url=url,
-                        allocation=int(allocation) if allocation.strip() else None,
-                        policy=policy)
+    service.add_channel(
+        conn,
+        ev["id"],
+        kind,
+        label=label,
+        url=url,
+        allocation=int(allocation) if allocation.strip() else None,
+        policy=policy,
+    )
     conn.commit()
     return RedirectResponse(f"/events/{ev['id']}?tab=channels", status_code=303)
 
 
 @app.post("/channels/{cid}")
-def edit_channel(cid: str, url: str = Form(""), allocation: str = Form(""),
-                 policy: str = Form("waitlist"), show_on_list: str = Form(""),
-                 credential_id: str = Form(""), _=Depends(require_organiser)):
+def edit_channel(
+    cid: str,
+    url: str = Form(""),
+    allocation: str = Form(""),
+    policy: str = Form("waitlist"),
+    show_on_list: str = Form(""),
+    credential_id: str = Form(""),
+    _=Depends(require_organiser),
+):
     conn = get_conn()
     row = conn.execute("SELECT * FROM channel WHERE id = ?", (cid,)).fetchone()
     if row is None:
@@ -232,8 +328,17 @@ def edit_channel(cid: str, url: str = Form(""), allocation: str = Form(""),
     conn.execute(
         """UPDATE channel SET url=?, allocation=?, policy=?, show_on_list=?,
            credential_id=?, state=?, updated_at=? WHERE id=?""",
-        (url.strip(), int(allocation) if allocation.strip() else None, policy,
-         1 if show_on_list else 0, credential_id or None, state, db.now(), cid))
+        (
+            url.strip(),
+            int(allocation) if allocation.strip() else None,
+            policy,
+            1 if show_on_list else 0,
+            credential_id or None,
+            state,
+            db.now(),
+            cid,
+        ),
+    )
     conn.commit()
     return RedirectResponse(f"/events/{row['event_id']}?tab=channels", status_code=303)
 
@@ -252,14 +357,14 @@ def delete_channel(cid: str, _=Depends(require_organiser)):
 
 # ------------------------------------------------------------------ actions
 
+
 @app.post("/events/{eid}/publish")
 def do_publish(eid: str, _=Depends(require_organiser)):
     conn = get_conn()
     ev = _event_or_404(conn, eid)
     since = db.last_log_id(conn, ev["id"])
     service.publish(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
-                            status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}", status_code=303)
 
 
 @app.post("/events/{eid}/push")
@@ -268,8 +373,7 @@ def do_push(eid: str, _=Depends(require_organiser)):
     ev = _event_or_404(conn, eid)
     since = db.last_log_id(conn, ev["id"])
     service.push_update(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
-                            status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}", status_code=303)
 
 
 @app.post("/events/{eid}/close")
@@ -278,8 +382,7 @@ def do_close(eid: str, open_: str = Form(""), _=Depends(require_organiser)):
     ev = _event_or_404(conn, eid)
     since = db.last_log_id(conn, ev["id"])
     service.set_open(conn, ev["id"], bool(open_))
-    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}",
-                            status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=channels&since={since}", status_code=303)
 
 
 @app.post("/events/{eid}/sync")
@@ -292,8 +395,7 @@ def do_sync(eid: str, _=Depends(require_organiser)):
     service.recheck_listings(conn, ev["id"])
     service.sync_signups(conn, ev["id"])
     service.auto_close_if_full(conn, ev["id"])
-    return RedirectResponse(f"/events/{ev['id']}?tab=signups&since={since}",
-                            status_code=303)
+    return RedirectResponse(f"/events/{ev['id']}?tab=signups&since={since}", status_code=303)
 
 
 @app.post("/events/{eid}/promote")
@@ -322,42 +424,65 @@ def export_csv(eid: str, _=Depends(require_organiser)):
     ev = _event_or_404(conn, eid)
     buf = io.StringIO()
     csv.writer(buf).writerows(to_csv_rows(service.people(conn, ev["id"])))
-    return Response(buf.getvalue(), media_type="text/csv", headers={
-        "Content-Disposition": f'attachment; filename="{ev["slug"]}-signups.csv"'})
+    return Response(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{ev["slug"]}-signups.csv"'},
+    )
 
 
 @app.get("/access", response_class=HTMLResponse)
-def access_page(request: Request, kind: str = "", next: str = "",
-                _=Depends(require_organiser)):
+def access_page(request: Request, kind: str = "", next: str = "", _=Depends(require_organiser)):
     """Saved platform access — add, replace, test, remove."""
     conn = get_conn()
-    return templates.TemplateResponse(request, "access.html", {
-        "credentials": service.credentials(conn),
-        "open_kind": kind,
-        "next": next,
-        "fields": ACCESS_FIELDS,
-    })
+    return templates.TemplateResponse(
+        request,
+        "access.html",
+        {
+            "credentials": service.credentials(conn),
+            "open_kind": kind,
+            "next": next,
+            "fields": ACCESS_FIELDS,
+        },
+    )
 
 
 @app.post("/access")
-def add_access(kind: str = Form(...), secret: str = Form(...),
-               label: str = Form(""), extra: str = Form(""),
-               next: str = Form(""), _=Depends(require_organiser)):
+def add_access(
+    kind: str = Form(...),
+    secret: str = Form(...),
+    label: str = Form(""),
+    extra: str = Form(""),
+    next: str = Form(""),
+    _=Depends(require_organiser),
+):
     conn = get_conn()
     field = (ACCESS_FIELDS.get(kind, {}).get("extra") or ("extra",))[0]
     conn.execute(
         "INSERT INTO credential (id, kind, label, secret, config, created_at) "
         "VALUES (?,?,?,?,?,?)",
-        (db.new_id(), kind, label.strip() or NAMES.get(kind, kind), secret.strip(),
-         json.dumps({field: extra.strip() or None}), db.now()))
+        (
+            db.new_id(),
+            kind,
+            label.strip() or NAMES.get(kind, kind),
+            secret.strip(),
+            json.dumps({field: extra.strip() or None}),
+            db.now(),
+        ),
+    )
     conn.commit()
     return RedirectResponse(next or "/access", status_code=303)
 
 
 @app.post("/access/{cid}")
-def update_access(cid: str, secret: str = Form(""), label: str = Form(""),
-                  extra: str = Form(""), next: str = Form(""),
-                  _=Depends(require_organiser)):
+def update_access(
+    cid: str,
+    secret: str = Form(""),
+    label: str = Form(""),
+    extra: str = Form(""),
+    next: str = Form(""),
+    _=Depends(require_organiser),
+):
     """Replace the token or the destination details. Blank secret keeps the old one."""
     conn = get_conn()
     row = conn.execute("SELECT * FROM credential WHERE id = ?", (cid,)).fetchone()
@@ -366,8 +491,13 @@ def update_access(cid: str, secret: str = Form(""), label: str = Form(""),
     field = (ACCESS_FIELDS.get(row["kind"], {}).get("extra") or ("extra",))[0]
     conn.execute(
         "UPDATE credential SET secret = ?, label = ?, config = ? WHERE id = ?",
-        (secret.strip() or row["secret"], label.strip() or row["label"],
-         json.dumps({field: extra.strip() or None}), cid))
+        (
+            secret.strip() or row["secret"],
+            label.strip() or row["label"],
+            json.dumps({field: extra.strip() or None}),
+            cid,
+        ),
+    )
     conn.commit()
     return RedirectResponse(next or "/access", status_code=303)
 
@@ -403,6 +533,7 @@ def check_access(cid: str, _=Depends(require_organiser)):
 
 # --------------------------------------------------------------- public page
 
+
 @app.get("/l/{slug}.ics")
 def ics(slug: str):
     """Add to calendar — free, and it stops the 'what time was it again?' emails."""
@@ -415,8 +546,12 @@ def ics(slug: str):
         return (v or "").replace("-", "").replace(":", "")[:15] or ""
 
     lines = [
-        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Turnout//EN", "BEGIN:VEVENT",
-        f"UID:{ev['id']}@turnout", f"SUMMARY:{ev['title']}",
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Turnout//EN",
+        "BEGIN:VEVENT",
+        f"UID:{ev['id']}@turnout",
+        f"SUMMARY:{ev['title']}",
         f"DTSTART:{stamp(ev['starts_at'])}",
     ]
     if ev["ends_at"]:
@@ -437,12 +572,20 @@ def link_list(slug: str, request: Request):
     if ev is None:
         raise HTTPException(404, "no such event")
     c = cap.read(conn, ev["id"])
-    channels = [ch for ch in service.get_channels(conn, ev["id"])
-                if ch["show_on_list"] and ch["url"]]
-    return templates.TemplateResponse(request, "list.html", {
-        "e": ev, "channels": channels, "cap": c,
-        "remaining_for": c.remaining_for, "capability": capability,
-    })
+    channels = [
+        ch for ch in service.get_channels(conn, ev["id"]) if ch["show_on_list"] and ch["url"]
+    ]
+    return templates.TemplateResponse(
+        request,
+        "list.html",
+        {
+            "e": ev,
+            "channels": channels,
+            "cap": c,
+            "remaining_for": c.remaining_for,
+            "capability": capability,
+        },
+    )
 
 
 @app.get("/l/{slug}/qr.svg")
@@ -487,50 +630,50 @@ if DESKTOP:
         if not secrets.compare_digest(k, expected or ""):
             raise HTTPException(403, "open Turnout from its icon")
         response = RedirectResponse("/", status_code=303)
-        response.set_cookie("turnout_local", expected, httponly=True,
-                            samesite="lax", path="/")
+        response.set_cookie("turnout_local", expected, httponly=True, samesite="lax", path="/")
         return response
 
     @app.get("/app", response_class=HTMLResponse)
     def app_page(request: Request, said: str = "", _=Depends(require_organiser)):
-        return templates.TemplateResponse(request, "app.html", {
-            "version": __version__,
-            "data_dir": str(paths.data_dir()),
-            "backups": sorted((p.name for p in paths.backup_dir().glob("*.zip")),
-                              reverse=True)[:10],
-            "update_check": update.enabled(),
-            "available": update.check(),
-            "said": said,
-        })
+        return templates.TemplateResponse(
+            request,
+            "app.html",
+            {
+                "version": __version__,
+                "data_dir": str(paths.data_dir()),
+                "backups": sorted((p.name for p in paths.backup_dir().glob("*.zip")), reverse=True)[
+                    :10
+                ],
+                "update_check": update.enabled(),
+                "available": update.check(),
+                "said": said,
+            },
+        )
 
     @app.post("/app/backup")
-    def app_backup(include_credentials: str = Form(""),
-                   _=Depends(require_organiser)):
-        archive = backup.write(get_conn(), paths.backup_dir(),
-                               include_credentials=bool(include_credentials))
-        return RedirectResponse(f"/app?said=Backed+up+to+{archive.name}",
-                                status_code=303)
+    def app_backup(include_credentials: str = Form(""), _=Depends(require_organiser)):
+        archive = backup.write(
+            get_conn(), paths.backup_dir(), include_credentials=bool(include_credentials)
+        )
+        return RedirectResponse(f"/app?said=Backed+up+to+{archive.name}", status_code=303)
 
     @app.post("/app/restore")
-    async def app_restore(file: UploadFile = File(...),
-                          _=Depends(require_organiser)):
+    async def app_restore(file: UploadFile = File(...), _=Depends(require_organiser)):
         global _conn
         paths.ensure_data_dir()
         staged = paths.backup_dir() / "incoming.zip"
         staged.parent.mkdir(parents=True, exist_ok=True)
         staged.write_bytes(await file.read())
         try:
-            safety = backup.restore(staged, Path(paths.db_path()),
-                                    get_conn(), paths.backup_dir())
+            safety = backup.restore(staged, Path(paths.db_path()), get_conn(), paths.backup_dir())
         except ValueError:
-            return RedirectResponse(
-                "/app?said=That+file+is+not+a+Turnout+backup", status_code=303)
+            return RedirectResponse("/app?said=That+file+is+not+a+Turnout+backup", status_code=303)
         finally:
             staged.unlink(missing_ok=True)
-        _conn = None       # reopened on the next request, against the new file
+        _conn = None  # reopened on the next request, against the new file
         return RedirectResponse(
-            f"/app?said=Restored.+Your+previous+data+is+in+{safety.name}",
-            status_code=303)
+            f"/app?said=Restored.+Your+previous+data+is+in+{safety.name}", status_code=303
+        )
 
     @app.post("/app/update-check")
     def app_update_check(on: str = Form(""), _=Depends(require_organiser)):
@@ -548,8 +691,16 @@ if DESKTOP:
     @app.post("/app/quit", response_class=HTMLResponse)
     def app_quit(request: Request, _=Depends(require_organiser)):
         QUIT.set()
-        return templates.TemplateResponse(request, "app.html", {
-            "stopped": True, "version": __version__,
-            "data_dir": str(paths.data_dir()), "backups": [],
-            "update_check": update.enabled(), "available": None, "said": "",
-        })
+        return templates.TemplateResponse(
+            request,
+            "app.html",
+            {
+                "stopped": True,
+                "version": __version__,
+                "data_dir": str(paths.data_dir()),
+                "backups": [],
+                "update_check": update.enabled(),
+                "available": None,
+                "said": "",
+            },
+        )

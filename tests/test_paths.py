@@ -51,6 +51,5 @@ def test_turnout_db_still_wins_so_docker_is_unaffected(monkeypatch):
 
 def test_everything_else_lives_beside_the_database(monkeypatch):
     monkeypatch.setenv("TURNOUT_DATA_DIR", "/tmp/turnout-test")
-    for p in (paths.log_path(), paths.state_path(),
-              paths.token_path(), paths.backup_dir()):
+    for p in (paths.log_path(), paths.state_path(), paths.token_path(), paths.backup_dir()):
         assert str(p).startswith("/tmp/turnout-test")

@@ -53,8 +53,7 @@ class LocalGuard(BaseHTTPMiddleware):
         if self.token and not public:
             supplied = request.cookies.get("turnout_local") or ""
             if not secrets.compare_digest(supplied, self.token):
-                return PlainTextResponse(
-                    "Open Turnout from its icon.", status_code=403)
+                return PlainTextResponse("Open Turnout from its icon.", status_code=403)
 
         if request.method not in SAFE_METHODS:
             origin = request.headers.get("origin")
