@@ -15,13 +15,23 @@ for one real group. Everything after this is widening.
 
 ## Quick start
 
+**If you just want to use it:** installers for your computer will be
+published on the [Releases](https://github.com/geocontrol/turnout/releases)
+page. Once they are, download the one for your platform, install it, and open
+Turnout from your applications. There is nothing to configure — no accounts,
+no API tokens.
+
+**If you are working on it:**
+
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate   # Python 3.10 or newer
+pip install -r requirements-dev.txt
 uvicorn turnout.main:app --reload --port 8100
 ```
 
-Open <http://localhost:8100>. There is nothing else to configure — no
-accounts, no API tokens, no atproto identity.
+Open <http://localhost:8100>. In a source checkout the database is
+`data/turnout.db`, as it always was; the packaged app keeps it in your
+computer's application-data folder instead.
 
 | Path | What it is |
 | --- | --- |

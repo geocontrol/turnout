@@ -1,0 +1,9 @@
+# Development dependencies: the pinned runtime set, plus everything needed to
+# test, lint, format, compile locks, and package the desktop build. Not
+# shipped inside the app or the container image.
+-r requirements.txt
+pytest>=8.0
+pip-tools>=7.4
+briefcase>=0.3.17
+ruff
+black
