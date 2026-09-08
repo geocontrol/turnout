@@ -64,8 +64,9 @@ def local_token() -> str | None:
     p = paths.token_path()
     if not p.exists():
         paths.ensure_data_dir()
-        p.write_text(secrets.token_urlsafe(32))
-        p.chmod(0o600)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_urlsafe(32))
     return p.read_text().strip()
 
 
