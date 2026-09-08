@@ -172,6 +172,12 @@ def test_the_public_link_list_is_still_public(desktop):
     assert stranger.get("/healthz").status_code == 200
 
 
+def _backup_of_current_data(client, tmp_path):
+    """A real archive, written through the route the organiser actually uses."""
+    client.post("/app/backup", data={"include_credentials": "1"}, follow_redirects=False)
+    return max((tmp_path / "backups").glob("turnout-backup-*.zip"))
+
+
 def _corrupt_backup(client, tmp_path):
     """A genuine Turnout backup with one byte flipped inside the database.
 
@@ -181,8 +187,7 @@ def _corrupt_backup(client, tmp_path):
     """
     from turnout import backup as bk
 
-    client.post("/app/backup", data={"include_credentials": "1"}, follow_redirects=False)
-    good = max((tmp_path / "backups").glob("turnout-backup-*.zip"))
+    good = _backup_of_current_data(client, tmp_path)
     with zipfile.ZipFile(good) as z:
         manifest, dbbytes = z.read(bk.MANIFEST), z.read(bk.DB_ENTRY)
 
@@ -219,6 +224,46 @@ def test_a_restore_that_fails_late_leaves_the_app_serving(desktop, tmp_path):
     page = client.get("/")
     assert page.status_code == 200, "the app stopped serving after a failed restore"
     assert "Public meeting" in page.text, "the message promised the data was untouched"
+
+
+def test_an_undeletable_upload_does_not_take_the_app_down_with_it(desktop, tmp_path, monkeypatch):
+    """The cleanup in the finally must not become the new way to brick this.
+
+    Removing the staged upload can fail — antivirus still holding the file on
+    Windows, a read-only backups directory. Raising there would have skipped
+    _conn = None and escaped the whole try/finally uncaught, landing the
+    volunteer in exactly the state a failed restore used to: a 500 on the
+    restore and a 500 on every page after it. By that point the restore has
+    already happened, so a staging file nobody could delete is a line in the
+    log and nothing more.
+
+    Sabotage only incoming.zip: backup.restore() unlinks its own temp file
+    through the same call, and that one still has to work.
+    """
+    main, client = desktop
+    archive = _backup_of_current_data(client, tmp_path)
+
+    real_unlink = Path.unlink
+
+    def stubborn(self, *a, **kw):
+        if self.name == "incoming.zip":
+            raise PermissionError(13, "the file is in use by another process")
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "unlink", stubborn)
+
+    r = client.post(
+        "/app/restore",
+        files={"file": ("backup.zip", archive.read_bytes(), "application/zip")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, "a staging file that would not delete reached the user"
+    assert "Restored" in r.headers["location"]
+    assert main._conn is None, "the closed handle survived the request"
+
+    page = client.get("/")
+    assert page.status_code == 200, "the app stopped serving over a leftover upload"
+    assert "Public meeting" in page.text
 
 
 def test_a_file_that_is_not_a_backup_is_still_named_as_such(desktop, tmp_path):

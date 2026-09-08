@@ -711,8 +711,19 @@ if DESKTOP:
                 status_code=303,
             )
         finally:
-            staged.unlink(missing_ok=True)
+            # Order matters. This cannot fail, and it is the thing that stops
+            # a closed handle outliving the request; anything after it might
+            # fail and must not be allowed to skip it.
             _conn = None  # cheap to reopen; never leave a closed handle here
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                # Windows antivirus still holding the upload, a read-only
+                # backups directory. By here the restore has either worked or
+                # already been reported, and the next one overwrites this file
+                # anyway — a staging file nobody could delete is not something
+                # to put in front of a volunteer.
+                log.warning("could not remove the staged upload %s", staged, exc_info=True)
         return RedirectResponse(
             f"/app?said=Restored.+Your+previous+data+is+in+{safety.name}", status_code=303
         )
