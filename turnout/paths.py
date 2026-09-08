@@ -21,8 +21,19 @@ APP_NAME = "Turnout"
 def frozen() -> bool:
     """True when running from a packaged build rather than a source checkout.
 
-    Briefcase and PyInstaller both set sys.frozen. TURNOUT_FROZEN exists so
-    the packaged-artifact tests can force the packaged behaviour.
+    PyInstaller sets sys.frozen, and that is the only automatic signal here.
+    Briefcase does not set it — it is a packager rather than a freezer, and
+    ships an ordinary interpreter with the app beside it (grep the installed
+    briefcase for sys.frozen and you get nothing). So a Briefcase build must
+    set TURNOUT_FROZEN=1 in its entry point, or the packaging work must
+    establish some other signal and this function must learn it.
+
+    Getting that wrong is not a small bug: frozen() False under a packaged
+    build sends data_dir() to Path("data"), relative to the working
+    directory of a double-clicked app — which on macOS is `/`.
+
+    TURNOUT_FROZEN also lets the packaged-artifact tests force the packaged
+    behaviour from a source checkout.
     """
     return bool(getattr(sys, "frozen", False)) or os.environ.get("TURNOUT_FROZEN") == "1"
 
