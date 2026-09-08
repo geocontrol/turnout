@@ -55,7 +55,13 @@ def newer(candidate: str, current: str) -> bool:
             digits = "".join(c for c in piece if c.isdigit())
             out.append(int(digits) if digits else 0)
         return tuple(out)
-    return parts(candidate) > parts(current)
+
+    c_parts = parts(candidate)
+    cur_parts = parts(current)
+    max_len = max(len(c_parts), len(cur_parts))
+    c_padded = c_parts + (0,) * (max_len - len(c_parts))
+    cur_padded = cur_parts + (0,) * (max_len - len(cur_parts))
+    return c_padded > cur_padded
 
 
 def check(client: httpx.Client | None = None) -> dict | None:
@@ -79,5 +85,8 @@ def check(client: httpx.Client | None = None) -> dict | None:
         log.info("update check did not complete: %s", exc)
     finally:
         if owned:
-            client.close()
+            try:
+                client.close()
+            except Exception as exc:   # noqa: BLE001 — deliberately total
+                log.info("update check: could not close client: %s", exc)
     return None

@@ -17,6 +17,13 @@ def test_version_comparison_is_numeric_not_alphabetical():
     assert update.newer("1.0.0", "0.99.99") is True
 
 
+def test_version_comparison_handles_different_segment_counts():
+    """Versions with different segment counts must compare correctly."""
+    assert update.newer("0.2.0", "0.2") is False
+    assert update.newer("0.2", "0.2.0") is False
+    assert update.newer("1.0.1", "1.0") is True
+
+
 def test_a_newer_release_is_reported(monkeypatch, tmp_path):
     monkeypatch.setenv("TURNOUT_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("turnout.update.CURRENT", "0.1.0")
@@ -69,3 +76,22 @@ def test_nothing_is_fetched_when_it_is_switched_off(monkeypatch, tmp_path):
         raise AssertionError("the network was touched after being told not to")
 
     assert update.check(httpx.Client(transport=httpx.MockTransport(handler))) is None
+
+
+def test_check_never_raises_even_on_close_failure(monkeypatch, tmp_path):
+    """The 'never raises' contract holds even if client.close() fails."""
+    monkeypatch.setenv("TURNOUT_DATA_DIR", str(tmp_path))
+
+    class BrokenTransport(httpx.BaseTransport):
+        def handle_request(self, request):
+            return httpx.Response(200, json={"version": "0.2.0", "url": "x", "notes": ""})
+
+    class BrokenClient(httpx.Client):
+        def close(self):
+            raise RuntimeError("close is broken")
+
+    client = BrokenClient(transport=BrokenTransport())
+    result = update.check(client)
+    # Should return the update dict without raising
+    assert result is not None
+    assert result["version"] == "0.2.0"
