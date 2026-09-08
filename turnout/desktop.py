@@ -18,10 +18,11 @@ import threading
 import time
 import webbrowser
 from typing import Any, Callable
+from urllib.parse import quote
 
 import httpx
 
-from . import __version__, paths
+from . import __version__, paths, update
 
 PREFERRED_PORT = 8100
 log = logging.getLogger("turnout.desktop")
@@ -150,6 +151,29 @@ def self_test() -> int:
     return 0 if all(ok for _, ok in checks) else 1
 
 
+def _entry_url(port: int, token: str | None = None) -> str:
+    """The URL to point a browser at, token and all.
+
+    Never bare `/`. The turnout_local cookie is a session cookie, so a second
+    launch cannot assume the browser still holds one — a closed window, a
+    different browser or a private tab and it is gone. Bare `/` would then
+    meet LocalGuard's "Open Turnout from its icon", which is exactly what the
+    organiser just did, and there would be no way back in.
+
+    Falls back to `/` only if the token file cannot be read, where an
+    unhelpful page still beats a launcher that crashes.
+    """
+    if token is None:
+        try:
+            token = paths.token_path().read_text().strip()
+        except OSError as exc:
+            log.info("could not read the launch token: %s", exc)
+            token = ""
+    if not token:
+        return f"http://127.0.0.1:{port}/"
+    return f"http://127.0.0.1:{port}/app/enter?k={quote(token)}"
+
+
 def _make_stop(server: Any, tray: list) -> Callable[[], None]:
     """Build the one callback that actually ends the process.
 
@@ -175,14 +199,23 @@ def _make_stop(server: Any, tray: list) -> Callable[[], None]:
     return stop
 
 
-def _run_tray(open_url: str, stop: Callable[[], None], started: Callable[[object], None]) -> None:
-    """Best-effort tray icon. Never load-bearing: Quit is also in the web UI."""
+def _run_tray(open_url: str, stop: Callable[[], None], started: Callable[[object], None]) -> bool:
+    """Best-effort tray icon. Never load-bearing: Quit is also in the web UI.
+
+    Returns True only if a tray actually ran and has now been stopped — which
+    is the one case that means "the organiser quit". False means there was
+    never a tray to quit: no pystray, no display, no AppIndicator extension
+    under GNOME. The caller must be able to tell those apart, because
+    treating "there is no tray" as "the user asked to leave" shuts the server
+    down seconds after the browser opened, on the platform where the tray is
+    most likely to be missing.
+    """
     try:
         import pystray
         from PIL import Image
     except Exception as exc:  # noqa: BLE001
         log.info("no tray support available: %s", exc)
-        return
+        return False
     try:
         image = Image.open(paths.resource_dir() / "resources" / "icon.png")
         icon = pystray.Icon(
@@ -201,8 +234,10 @@ def _run_tray(open_url: str, stop: Callable[[], None], started: Callable[[object
         )
         started(icon)  # hand it back before we block
         icon.run()
+        return True
     except Exception as exc:  # noqa: BLE001
         log.info("tray icon could not start, carrying on without it: %s", exc)
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     port, already = choose_port()
     if already:
         log.info("Turnout is already running on %s; opening a tab", port)
-        webbrowser.open(f"http://127.0.0.1:{port}/")
+        webbrowser.open(_entry_url(port))
         return 0
 
     import uvicorn
@@ -236,7 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         web.app, host="127.0.0.1", port=port, log_level="info", access_log=False
     )
     server = uvicorn.Server(config)
-    threading.Thread(target=server.run, name="turnout-server", daemon=True).start()
+    serving = threading.Thread(target=server.run, name="turnout-server", daemon=True)
+    serving.start()
 
     for _ in range(100):
         if is_turnout(port):
@@ -246,9 +282,14 @@ def main(argv: list[str] | None = None) -> int:
         log.error("the server did not come up on port %s", port)
         return 1
 
-    open_url = f"http://127.0.0.1:{port}/app/enter?k={token}"
+    open_url = _entry_url(port, token)
     if os.environ.get("TURNOUT_NO_BROWSER") != "1":
         webbrowser.open(open_url)
+
+    # Off the request path on purpose: update.check() is a five-second
+    # network timeout when there is no signal, and no page render may ever
+    # wait on it. This writes the answer to state.json; base.html reads it.
+    threading.Thread(target=update.refresh, name="turnout-update", daemon=True).start()
 
     tray: list = []  # gains the running icon, if any, once it starts
     stop = _make_stop(server, tray)
@@ -260,12 +301,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if os.environ.get("TURNOUT_NO_TRAY") == "1":
         web.QUIT.wait()
-    else:
-        _run_tray(open_url, stop, tray.append)
-        web.QUIT.set()  # tray closed: bring the server down with it
+    elif not _run_tray(open_url, stop, tray.append):
+        # No tray ever ran, so nothing has been quit. Keep serving; the web
+        # UI's own Quit Turnout button is the way out on this machine.
+        log.info("no tray icon; serving until Quit is used in the web UI")
+        web.QUIT.wait()
+    web.QUIT.set()  # the tray was closed, or /app/quit set this already
 
     server.should_exit = True
-    time.sleep(0.5)
+    # Publishing an event makes a real HTTPS call and commits afterwards.
+    # Killing the process in that window leaves Turnout believing an event is
+    # unpublished when it is live on the platform, and two listings for one
+    # meeting is the mistake with no undo. Wait for the request in flight
+    # rather than counting to half a second and hoping.
+    serving.join(timeout=10)
+    if serving.is_alive():
+        log.warning("the server did not stop within 10s; exiting anyway")
     return 0
 
 
