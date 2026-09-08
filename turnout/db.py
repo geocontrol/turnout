@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = os.environ.get("TURNOUT_DB", "data/turnout.db")
+from . import paths
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -130,7 +130,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def connect(path: str | None = None) -> sqlite3.Connection:
-    p = path or DB_PATH
+    p = path or paths.db_path()
     if p != ":memory:":
         Path(p).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p, check_same_thread=False)
