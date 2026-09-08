@@ -13,6 +13,7 @@ afterwards that they posted a live Eventbrite key through it.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import zipfile
@@ -97,7 +98,7 @@ def read_manifest(archive: Path) -> dict:
             if MANIFEST not in names or DB_ENTRY not in names:
                 raise ValueError("not a Turnout backup")
             return json.loads(z.read(MANIFEST))
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, json.JSONDecodeError) as exc:
         raise ValueError("not a Turnout backup") from exc
 
 
@@ -120,8 +121,16 @@ def restore(archive: Path, db_file: Path, conn: sqlite3.Connection, backups: Pat
     read_manifest(archive)
     safety = write(conn, backups, include_credentials=True)
     conn.close()
-    with zipfile.ZipFile(archive) as z, open(db_file, "wb") as f:
-        shutil.copyfileobj(z.open(DB_ENTRY), f)
+    # Write beside the target and swap it in with a rename, not a direct
+    # overwrite. A crash or a truncated read partway through the copy must
+    # leave the live database exactly as it was, not half-replaced.
+    tmp = db_file.with_name(db_file.name + ".restoring")
+    try:
+        with zipfile.ZipFile(archive) as z, open(tmp, "wb") as f:
+            shutil.copyfileobj(z.open(DB_ENTRY), f)
+        os.replace(tmp, db_file)
+    finally:
+        tmp.unlink(missing_ok=True)
     # The old WAL and shared-memory sidecars describe a database that no
     # longer exists. Leaving them would corrupt the one just restored.
     for suffix in ("-wal", "-shm"):

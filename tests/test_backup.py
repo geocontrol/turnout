@@ -105,3 +105,43 @@ def test_restore_refuses_a_zip_that_is_not_ours(tmp_path):
 
     with pytest.raises(ValueError):
         backup.restore(junk, p, conn, tmp_path / "backups")
+
+
+def test_restore_refuses_an_archive_with_a_corrupt_manifest(tmp_path):
+    """The manifest is what stands between a foreign file and an overwrite.
+    A truncated one must fail closed, the same as a non-zip."""
+    junk = tmp_path / "corrupt.zip"
+    with zipfile.ZipFile(junk, "w") as z:
+        z.writestr(backup.MANIFEST, "{not valid json")
+        z.writestr(backup.DB_ENTRY, b"whatever")
+
+    with pytest.raises(ValueError):
+        backup.read_manifest(junk)
+
+
+def test_restore_leaves_the_database_untouched_if_the_copy_fails(tmp_path, monkeypatch):
+    """A crash mid-restore is not a reason the volunteer should lose the
+    database that was live before they started."""
+    p, conn = _disk_db(tmp_path)
+    archive = backup.write(conn, tmp_path / "backups", include_credentials=True)
+
+    # restore() also calls write() internally for its safety backup, which
+    # uses shutil.copyfileobj too (zipfile writes entries with it). Only
+    # sabotage the copy into our own ".restoring" temp file, so the safety
+    # backup that comes before it still succeeds.
+    real_copyfileobj = backup.shutil.copyfileobj
+
+    def flaky(fsrc, fdst, *args, **kwargs):
+        if getattr(fdst, "name", "").endswith(".restoring"):
+            fdst.write(b"partial")
+            raise OSError("simulated crash mid-copy")
+        return real_copyfileobj(fsrc, fdst, *args, **kwargs)
+
+    monkeypatch.setattr(backup.shutil, "copyfileobj", flaky)
+
+    with pytest.raises(OSError):
+        backup.restore(archive, p, conn, tmp_path / "backups")
+
+    after = db.connect(str(p))
+    assert after.execute("SELECT title FROM event").fetchone()[0] == "Public meeting"
+    assert not p.with_name(p.name + ".restoring").exists()
