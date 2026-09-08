@@ -8,7 +8,6 @@ single statement we can be confident about.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
