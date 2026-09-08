@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}This computer · Turnout{% endblock %}
+{% block content %}
+<div class="wrap">
+
+{% if stopped %}
+  <div class="banner info"><div class="grow">
+    <b>Turnout has stopped.</b> You can close this tab. Open it again from
+    the Turnout icon.
+  </div></div>
+{% else %}
+
+  {% if said %}<div class="banner info"><div class="grow">{{ said }}</div></div>{% endif %}
+
+  {% if available %}
+  <div class="banner warn"><div class="grow">
+    <b>Version {{ available.version }} is available.</b> {{ available.notes }}
+  </div><a class="btn sm" href="{{ available.url }}">Get it</a></div>
+  {% endif %}
+
+  <h1>This computer</h1>
+
+  <div class="card">
+    <h2>Your data</h2>
+    <p>Everything Turnout knows is in one folder on this computer:</p>
+    <p class="mono">{{ data_dir }}</p>
+    <p class="hint">Nothing is sent anywhere. If this laptop is lost, so is
+      the data — which is why the backup below matters.</p>
+  </div>
+
+  <div class="card">
+    <h2>Back up</h2>
+    <form method="post" action="/app/backup">
+      <label class="f"><span>
+        <input type="checkbox" name="include_credentials" value="1"
+               style="width:auto"> Include saved platform access
+      </span></label>
+      <p class="hint"><b>Leave that unticked unless you know you need it.</b>
+        Ticking it puts your live Eventbrite, Luma and Ticket Tailor keys
+        inside the backup file. Anyone who gets the file can then act as your
+        group on those platforms.</p>
+      <p class="hint">The backup always contains the names and email addresses
+        of everyone who has signed up. Treat it accordingly.</p>
+      <button type="submit">Back up now</button>
+    </form>
+    {% if backups %}
+      <div class="caps">
+        {% for b in backups %}<div><span class="mono">{{ b }}</span></div>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Restore</h2>
+    <form method="post" action="/app/restore" enctype="multipart/form-data">
+      <label class="f"><span>Backup file</span>
+        <input type="file" name="file" accept=".zip" required></label>
+      <p class="hint">This replaces everything currently in Turnout. A copy of
+        what is here now is saved first, so a mistake can be undone.</p>
+      <button type="submit" class="hot">Restore from this file</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Updates</h2>
+    <form method="post" action="/app/update-check">
+      <label class="f"><span>
+        <input type="checkbox" name="on" value="1" style="width:auto"
+               {% if update_check %}checked{% endif %}> Check for new versions
+      </span></label>
+      <p class="hint">Turnout asks GitHub whether a newer version exists. That
+        request tells GitHub your IP address and which version you are running,
+        and nothing else — no account, no identifier, no record of your events.
+        Untick it and Turnout never contacts anyone on its own.</p>
+      <button type="submit" class="ghost sm">Save</button>
+    </form>
+    <p class="hint">You are running version {{ version }}.</p>
+  </div>
+
+  <div class="card">
+    <h2>If something goes wrong</h2>
+    <p><a href="/app/log">Open the log</a> — copy it into an email if you are
+      asking for help.</p>
+  </div>
+
+  <div class="card">
+    <h2>Stop Turnout</h2>
+    <form method="post" action="/app/quit">
+      <button type="submit" class="ghost">Quit Turnout</button>
+    </form>
+    <p class="hint">Closing this tab leaves Turnout running in the background.
+      This stops it properly.</p>
+  </div>
+
+{% endif %}
+</div>
+{% endblock %}

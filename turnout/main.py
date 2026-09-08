@@ -16,31 +16,57 @@ import csv
 import io
 import json
 import os
+import secrets
+import threading
+from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from . import __version__, backup, paths, update
 from . import capacity as cap
 from . import db, service
 from .adapters import (ACCESS_FIELDS, CODES, IMPLEMENTED, KINDS, NAMES,
                        NEEDS_ACCESS, NOTES, can, capability, get)
 from .merge import suggest_merges, to_csv_rows
 
-HERE = os.path.dirname(__file__)
-templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
+#: Desktop mode: launched from an icon rather than a terminal or a container.
+DESKTOP = os.environ.get("TURNOUT_DESKTOP") == "1"
+
+templates = Jinja2Templates(directory=str(paths.resource_dir() / "templates"))
 templates.env.filters["from_json"] = lambda v: json.loads(v or "{}")
 templates.env.globals.update(
     NAMES=NAMES, NOTES=NOTES, CODES=CODES, KINDS=KINDS,
     IMPLEMENTED=IMPLEMENTED, can=can, capability=capability,
     capability_rows=service.capability_rows,
     NEEDS_ACCESS=NEEDS_ACCESS, ACCESS_FIELDS=ACCESS_FIELDS,
+    desktop=DESKTOP,
 )
 
 app = FastAPI(title="Turnout", docs_url=None, redoc_url=None)
 _conn = None
 TOKEN = os.environ.get("TURNOUT_TOKEN")
+
+#: Set by POST /app/quit. turnout/desktop.py watches this and stops the server.
+QUIT = threading.Event()
+
+
+def local_token() -> str | None:
+    """This install's browser token, created on first use.
+
+    Written 0600 so other users on a shared machine cannot read it. Only
+    meaningful in desktop mode; the hosted deployment uses TURNOUT_TOKEN.
+    """
+    if not DESKTOP:
+        return None
+    p = paths.token_path()
+    if not p.exists():
+        paths.ensure_data_dir()
+        p.write_text(secrets.token_urlsafe(32))
+        p.chmod(0o600)
+    return p.read_text().strip()
 
 
 def get_conn():
@@ -436,4 +462,93 @@ def qr(slug: str, request: Request):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    """Also how a second launch recognises an already-running Turnout."""
+    return {"ok": True, "app": "turnout", "version": __version__}
+
+
+# ----------------------------------------------------------- this computer
+#
+# Only mounted when Turnout was launched from its icon. A hosted deployment
+# has no business offering "quit" or a filesystem path to a log file.
+
+if DESKTOP:
+
+    @app.get("/app/enter")
+    def app_enter(k: str = ""):
+        """Trade the launch token for a cookie, then get it out of the URL.
+
+        The token arrives as a query parameter because that is the only thing
+        you can hand a browser you are opening. It does not stay there: a URL
+        lives in history, in the address bar, and in whatever the organiser
+        pastes into a support email.
+        """
+        expected = local_token()
+        if not secrets.compare_digest(k, expected or ""):
+            raise HTTPException(403, "open Turnout from its icon")
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie("turnout_local", expected, httponly=True,
+                            samesite="lax", path="/")
+        return response
+
+    @app.get("/app", response_class=HTMLResponse)
+    def app_page(request: Request, said: str = "", _=Depends(require_organiser)):
+        return templates.TemplateResponse(request, "app.html", {
+            "version": __version__,
+            "data_dir": str(paths.data_dir()),
+            "backups": sorted((p.name for p in paths.backup_dir().glob("*.zip")),
+                              reverse=True)[:10],
+            "update_check": update.enabled(),
+            "available": update.check(),
+            "said": said,
+        })
+
+    @app.post("/app/backup")
+    def app_backup(include_credentials: str = Form(""),
+                   _=Depends(require_organiser)):
+        archive = backup.write(get_conn(), paths.backup_dir(),
+                               include_credentials=bool(include_credentials))
+        return RedirectResponse(f"/app?said=Backed+up+to+{archive.name}",
+                                status_code=303)
+
+    @app.post("/app/restore")
+    async def app_restore(file: UploadFile = File(...),
+                          _=Depends(require_organiser)):
+        global _conn
+        paths.ensure_data_dir()
+        staged = paths.backup_dir() / "incoming.zip"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_bytes(await file.read())
+        try:
+            safety = backup.restore(staged, Path(paths.db_path()),
+                                    get_conn(), paths.backup_dir())
+        except ValueError:
+            return RedirectResponse(
+                "/app?said=That+file+is+not+a+Turnout+backup", status_code=303)
+        finally:
+            staged.unlink(missing_ok=True)
+        _conn = None       # reopened on the next request, against the new file
+        return RedirectResponse(
+            f"/app?said=Restored.+Your+previous+data+is+in+{safety.name}",
+            status_code=303)
+
+    @app.post("/app/update-check")
+    def app_update_check(on: str = Form(""), _=Depends(require_organiser)):
+        update.set_enabled(bool(on))
+        return RedirectResponse("/app?said=Saved", status_code=303)
+
+    @app.get("/app/log", response_class=PlainTextResponse)
+    def app_log(_=Depends(require_organiser)):
+        """The last of the log, because there is no terminal to read it in."""
+        try:
+            return paths.log_path().read_text()[-200_000:]
+        except OSError:
+            return "No log yet."
+
+    @app.post("/app/quit", response_class=HTMLResponse)
+    def app_quit(request: Request, _=Depends(require_organiser)):
+        QUIT.set()
+        return templates.TemplateResponse(request, "app.html", {
+            "stopped": True, "version": __version__,
+            "data_dir": str(paths.data_dir()), "backups": [],
+            "update_check": update.enabled(), "available": None, "said": "",
+        })

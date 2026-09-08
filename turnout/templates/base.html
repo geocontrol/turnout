@@ -106,6 +106,7 @@ tr:hover td{background:rgba(34,53,127,.05)}
   <a href="/" class="brand">TURN<span>OUT</span></a>
   <span class="tag">one event · every platform</span>
   <span class="spacer"></span>
+  {% if desktop %}<a href="/app" class="tag">This computer</a>{% endif %}
   {% block hdr_right %}{% endblock %}
 </div></header>
 {% endblock %}
