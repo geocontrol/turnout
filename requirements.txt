@@ -5,3 +5,5 @@ httpx>=0.27
 qrcode>=7.4
 python-multipart>=0.0.9
 pytest>=8.0
+pystray>=0.19
+pillow>=10.0
