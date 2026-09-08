@@ -5,12 +5,25 @@
 #    pip-compile -o requirements.txt requirements.in
 #
 # Hand-patched after generation: pip-tools resolves this lock on the compiling
-# host (macOS) and drops the `sys_platform == "darwin"` marker that pystray
-# itself declares on pyobjc-framework-quartz (see its Requires-Dist metadata).
-# Without the marker, `pip install -r requirements.txt` fails outright on
-# Linux, where PyObjC does not build — that's exactly what broke the
-# container image (see requirements-docker.txt). Re-add the three markers
-# below if you regenerate this file with pip-compile.
+# host (macOS) only, and does not carry over the platform markers that some
+# of these packages declare on their own conditional dependencies (checked
+# via each package's own Requires-Dist metadata). Two instances are known and
+# patched below:
+#   - pystray depends on pyobjc-framework-quartz only when
+#     sys_platform == "darwin"; without the marker, `pip install -r
+#     requirements.txt` fails outright on Linux (PyObjC does not build
+#     there) — this is exactly what broke the container image (see
+#     requirements-docker.txt).
+#   - pystray depends on python-xlib only when sys_platform == "linux";
+#     without the marker it is missing from the lock entirely, so a Linux
+#     install (the container's platform) floats it to whatever version
+#     PyPI serves that day, defeating the point of pinning.
+# This list is not closed — any platform-conditional transitive dependency
+# is at risk the same way (e.g. click depends on colorama only on Windows;
+# not added here because no Windows build exists yet, but watch for it when
+# one does). tests/test_requirements_lock.py enforces the markers below so a
+# future `pip-compile` re-run that silently drops them fails the suite
+# instead of failing quietly on the next platform someone tries.
 annotated-doc==0.0.5
     # via fastapi
 annotated-types==0.8.0
@@ -63,6 +76,8 @@ pystray==0.19.5
     # via -r requirements.in
 python-multipart==0.0.32
     # via -r requirements.in
+python-xlib==0.33 ; sys_platform == "linux"
+    # via pystray
 qrcode==8.2
     # via -r requirements.in
 six==1.17.0
