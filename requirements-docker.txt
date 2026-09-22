@@ -1,0 +1,4 @@
+# The container is not the desktop build: it serves many requests and runs on
+# Linux only, so the compiled event loop is worth having there.
+-r requirements.txt
+uvicorn[standard]>=0.30

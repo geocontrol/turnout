@@ -87,6 +87,8 @@ tr:hover td{background:rgba(34,53,127,.05)}
 .banner.warn{background:#E9B54A}.banner.stop{background:var(--pink);color:#fff}
 .banner.info{background:#fff}
 .banner .grow{flex:1;min-width:200px}
+.upd{background:#E9B54A;border-bottom:2px solid var(--ink);padding:10px 16px;font-size:.9rem}
+.upd .in{max-width:1080px;margin:0 auto;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
 .caps{border-top:1px solid var(--rule);margin-top:9px;padding-top:7px}
@@ -106,8 +108,21 @@ tr:hover td{background:rgba(34,53,127,.05)}
   <a href="/" class="brand">TURN<span>OUT</span></a>
   <span class="tag">one event · every platform</span>
   <span class="spacer"></span>
+  {% if desktop %}<a href="/app" class="tag">This computer</a>{% endif %}
   {% block hdr_right %}{% endblock %}
 </div></header>
+{# Until Homebrew, winget and Flathub exist this notice is the only update
+   channel there is, so it sits on every organiser page rather than behind a
+   settings link nobody opens. update_available() reads a cached answer off
+   disk — no network call happens while a page is being rendered. #}
+{% if desktop %}{% set upd = update_available() %}{% if upd %}
+<div class="upd"><div class="in">
+  <b>Turnout {{ upd.version }} is available.</b>
+  <span>You are running {{ version }}.{% if upd.notes %} {{ upd.notes }}{% endif %}</span>
+  <span class="spacer"></span>
+  {% if upd.url %}<a class="btn sm" href="{{ upd.url }}">Get it</a>{% endif %}
+</div></div>
+{% endif %}{% endif %}
 {% endblock %}
 {% block content %}{% endblock %}
 </body>

@@ -1,0 +1,16 @@
+# Runtime dependencies, loosely specified. requirements.txt is generated from
+# this with pip-compile — edit this file, never that one.
+#
+# uvicorn here is unadorned (no [standard] extra): the desktop build has no
+# use for uvloop or httptools. uvloop is a compiled extension with no Windows
+# support at all, and httptools's throughput gains only matter under load
+# that a single local organiser will never produce. The container build adds
+# the [standard] extra back via requirements-docker.txt.
+fastapi>=0.115
+uvicorn>=0.30
+jinja2>=3.1
+httpx>=0.27
+qrcode>=7.4
+python-multipart>=0.0.9
+pystray>=0.19
+pillow>=10.0
