@@ -4,7 +4,7 @@
 -r requirements.txt
 pytest>=8.0
 pip-tools>=7.4
-briefcase>=0.3.17
+briefcase>=0.4.5
 # Pinned exactly, not >=: this branch's lint/format history has no version
 # of record before now, so the point of pinning is to fix the tool this
 # branch was actually validated with, not just any later release of it.
